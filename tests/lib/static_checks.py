@@ -183,7 +183,20 @@ def main() -> int:
     # mechanism (a matched completion action is blocked, with no side effect) is
     # proven per provider by provoking a configured pattern; the policy (which
     # commands count as completion actions) is verified here by reading it.
-    guard_path = os.path.join(REPO, "runtime", "opencode", "verification-guard.ts")
+    # Two layouts: in the bootstrap repository the guard lives under runtime/,
+    # while an installed target keeps it where the runtime discovers plugins. The
+    # check has to find it in both, otherwise it passes in the repository and
+    # fails on every installation.
+    guard_candidates = [
+        os.path.join(REPO, "runtime", "opencode", "verification-guard.ts"),
+        os.path.normpath(
+            os.path.join(REPO, os.pardir, ".opencode", "plugin", "verification-guard.ts")
+        ),
+        os.path.normpath(
+            os.path.join(REPO, os.pardir, ".opencode", "plugins", "verification-guard.ts")
+        ),
+    ]
+    guard_path = next((c for c in guard_candidates if os.path.isfile(c)), guard_candidates[0])
     if os.path.isfile(guard_path):
         guard_src = open(guard_path, "r", encoding="utf-8").read()
         start = guard_src.find("const DEFAULT_COMPLETION_PATTERNS")
