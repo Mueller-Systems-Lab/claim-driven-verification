@@ -49,6 +49,14 @@ oracles:
       from a separate process, and the guard relays that verdict verbatim.
     qualification:
       mode: declared
+      rationale: >
+        The oracle is the engine's own gate verdict, which the guard relays. The seed
+        document is intentionally declarative so a fresh install validates without
+        executing project commands.
+      executable_unavailable_because: >
+        Executing this oracle would mean invoking the engine to check the engine, which
+        is circular. The qualifying cases are executed instead by the bootstrap canary
+        suite, whose result appears in the installation report.
       positive_case:
         description: engine reports CDV_GATE=PASS for a document whose claims are met
         result: PASS

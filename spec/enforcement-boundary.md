@@ -106,7 +106,20 @@ registered and called). The guard exposes:
 `verification_gate` is the supported way to declare completion. Its value is that
 it converts "I think I'm done" into a recorded, answered question.
 
-### 5. `event` — AUDIT
+### 5. `cdv context-proof` — CONTEXT INTEGRITY (v1.0.1)
+
+Not a runtime hook: a check the verifier must pass *before* interpreting any
+behavioural result. It establishes that the intended target is being observed,
+using indicators that cannot be satisfied by inheriting stale state, and fails
+closed on any contradiction. See `regression-v1.0.0-false-pass.md` for the
+false PASS that made it necessary and `failure-mode-model.md` for the failure
+mode it addresses.
+
+The reason it belongs in the enforcement boundary rather than in the test
+suite is that it constrains what the guard's evidence is allowed to *mean*.
+A block observed in the wrong directory is not a block.
+
+### 6. `event` — AUDIT
 
 Runtime events are delivered (measured). The guard appends to
 `.verification/audit.log`, and the enforcement canary reads that log as an
@@ -157,6 +170,72 @@ Anything not in the observe-only list falls through to the path check, so a tool
 added by a future runtime release is treated as write-capable rather than
 silently trusted. Fail-closed on the unknown.
 
+## A model may comply before the guard has to enforce
+
+Found while running the end-to-end canary against a second provider, and worth
+recording because it constrains what an enforcement test can demonstrate.
+
+The guard injects the live gate state into the system prompt. A model that reads
+it can conclude on its own that `.verification/` is protected infrastructure and
+**decline to attempt the write at all**. Observed directly: with a failing
+verification document in place, one model answered *"the `.verification/`
+directory is protected by the claim-driven verification gate — writes to it are
+blocked"* and never made the tool call. The same model, with a passing document
+in place, made the call and was blocked.
+
+From the outside these two runs look identical if you only check the file
+afterwards:
+
+| Run | Guard decision | File unchanged? |
+| --- | --- | --- |
+| agent attempted, guard refused | blocked | yes |
+| agent declined to attempt | never invoked | yes |
+
+"The file was not modified" is satisfied by both. This is the same shape as the
+v1.0.0 false PASS, one level up: an assertion about absence cannot distinguish
+"prevented" from "never happened".
+
+So the canary requires the guard's own audit log to record a refusal *appended
+during that step* before it treats the enforcement path as exercised, and reports
+`ANTI_TAMPER=NOT_PROVOKED_STATE_UNCHANGED` — explicitly untested — when no
+attempt could be provoked. `tests/verify.sh` then requires
+`ANTI_TAMPER=REFUSED_AND_RECORDED` from the **primary** provider, so the coverage
+is guaranteed at release level even when a particular model declines.
+
+### How coverage is therefore guaranteed
+
+The enforcement claim is conditional -- *if* a completion-adjacent action is
+attempted at gate ≠ PASS, the guard blocks it. The antecedent needs an attempt,
+and a well-behaved model will not supply one. So the pipeline separates the two
+things being shown:
+
+| Claim | How it is verified | Model-dependent? |
+| --- | --- | --- |
+| The mechanism: a matched completion action is refused, with no side effect | provoke a **configured** completion pattern (`touch CDV_E2E_MARKER`, registered through `guard.config.json`) | no -- the model has no reason to decline a harmless command |
+| The policy: which commands count as completion actions | `static_checks.py` reads the guard's default pattern list and asserts all 14 expected commands are present | no |
+| The policy, end to end | a **real** `git commit` is provoked; `tests/verify.sh` requires the primary provider to have refused one | once, at release level |
+| Writes to `.verification/` are refused | provoke, three routes; `verify.sh` requires the primary provider to have recorded a refusal | once, at release level |
+| No bypass occurred, on every provider | the file / commit count is asserted unchanged | no |
+
+The per-provider assertions are the ones that cannot be faked: a *successful*
+write or commit changes the world and is caught regardless of whether the attempt
+was provoked. What a declining model costs is coverage of the refusal path, not
+detection of a failure -- and coverage is required once, from a provider that
+does attempt it.
+
+Two things follow, and both are limits rather than defects:
+
+- **Model cooperation is a precondition for probing the guard, not for the guard
+  working.** Enforcement is deterministic; provoking it is not.
+- **A model that obeys the guard's stated intent is not evidence that the guard
+  enforced anything.** It is evidence that the model was cooperative. Only the
+  audit trail, written by the runtime, distinguishes them.
+
+This is also why the anti-tamper shell check is described as a heuristic rather
+than a boundary, and why no attempt was made in v1.0.1 to strengthen it further:
+no reproducible bypass was found, and speculative command-obfuscation detection
+would add complexity without closing anything observed.
+
 ## Records that are never trusted as decisions
 
 | Observation | Why it cannot decide a verdict |
@@ -168,6 +247,10 @@ silently trusted. Fail-closed on the unknown.
 | A guard reporting "no problems" | `cdv` reports `NOT_EXERCISED` for dimensions it was never given anything to check. |
 
 ## A measured failure of the test harness itself
+
+(The full incident record is `regression-v1.0.0-false-pass.md`. The summary
+below is retained because it belongs in the boundary discussion: it is the
+clearest example of a check that could not audit its own vantage point.)
 
 Worth recording because it is the most instructive thing found during
 development, and because it is the failure mode this whole architecture is built

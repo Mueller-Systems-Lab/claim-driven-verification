@@ -153,16 +153,65 @@ not the outcome that was requested.
 Every critical oracle must be qualified with a known-good **and a known-bad**
 case. The known-bad case is the load-bearing half: an oracle that has never been
 shown to reject a deliberately incorrect result is not evidence. Qualification
-may be `declared`, or `executable` — in which case the engine runs the supplied
-commands and reads the marker from their output, refusing to qualify an oracle
-that does not report detection, or that crashes instead of reporting.
+has two modes, and they are not interchangeable:
 
-Executable qualification is opt-in (`--allow-execute-oracles`), because running
-commands from a project's configuration file is a capability that should be
-granted deliberately. Without that grant, an executable oracle is reported
-unverified and blocks the critical claim rather than being trusted by default.
+| Mode | What it means | What it requires |
+| --- | --- | --- |
+| `EXECUTED` | the engine ran the oracle against both cases and observed the results | `positive_command` and `negative_command`, and `--allow-execute-oracles` |
+| `DECLARED` | the project asserts both cases were run | a rationale, and a statement of why executing is unavailable |
 
-### 13. Evidence freshness is simple and auditable
+`EXECUTED` is refused rather than quietly downgraded when oracle execution is not
+permitted, because accepting the weaker mode silently would mean the document got
+less assurance than it asked for. `DECLARED` remains available — it is auditable
+and far better than nothing — but it is an assertion about the verifier made by
+the party that benefits from the verifier passing, so it is marked, it requires
+a reason, and it produces an explicit assurance downgrade that is preserved in
+every output.
+
+A critical claim must not rely solely on a `DECLARED` oracle where executing it
+is technically possible. The engine cannot determine feasibility itself, so it
+requires the project to state why execution is impossible; a claim that cannot
+state it does not pass. A project that declares `executable_feasible: true` is
+refused outright: it has admitted stronger evidence was available and declined to
+produce it.
+
+### 13. Verification context integrity
+
+> A verification result is invalid unless the verifier can establish that it is
+> observing the intended target, in the intended execution context, through the
+> intended enforcement path.
+
+This rule is about the observer, not the observed, which is why it is easy to
+omit and why its absence is so damaging. Absence of an effect is only evidence of
+a cause if you were watching the right place.
+
+Before any behavioural result is interpreted, the verifier must establish:
+
+1. the intended target is being observed
+2. the intended execution context is active
+3. the intended enforcement mechanism executed
+4. the collected evidence belongs to that context
+
+Wrong-context verification **fails closed**. The verifier aborts; it does not
+continue and report that the checks passed. In particular:
+
+> Do not interpret absence of change as proof of blocking until context integrity
+> has been established.
+
+At least one indicator must come from a class that cannot be satisfied by
+inheriting stale state or by restating the caller's own input. `cwd` and `PWD` are
+both inherited on process spawn and are both therefore insufficient on their own;
+`PWD` specifically is the trap a runtime may prefer over the real working
+directory. `git -C <path> rev-parse` restates the input it is given and so is not
+independent either. What counts is evidence produced by somebody other than the
+party asserting the context: the runtime's own report of the project it used, a
+per-run nonce the caller planted, and the guard's audit log written by a different
+process into the target.
+
+See `regression-v1.0.0-false-pass.md` for the incident that made this rule
+concrete and `enforcement-boundary.md` for the enforcement it supports.
+
+### 14. Evidence freshness is simple and auditable
 
 The evaluated state is recorded once, at the top level (`state.commit`,
 `state.tree_hash`). Each evidence path records what it observed
@@ -177,7 +226,7 @@ No speculative dependency graph is built. The model is deliberately:
 FINAL STATE -> FINAL VERIFICATION -> FINAL EVIDENCE
 ```
 
-### 14. The repository is the executable specification
+### 15. The repository is the executable specification
 
 The bootstrap repository is the canonical source of the method and the engine.
 A target repository is the canonical source of its own claims, failure modes,

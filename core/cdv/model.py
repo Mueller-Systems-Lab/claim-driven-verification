@@ -41,6 +41,42 @@ QUAL_DETECTED = "DETECTED"  # negative case was correctly rejected
 QUAL_NOT_DETECTED = "NOT_DETECTED"
 QUAL_NOT_RUN = "NOT_RUN"
 
+# --- Oracle qualification assurance ---------------------------------------
+# Two modes, deliberately not interchangeable.
+#
+#   EXECUTED  the engine ran the oracle against a known-good and a known-bad
+#             case and observed the results. The verifier-of-the-verifier claim
+#             is backed by execution.
+#   DECLARED  the project asserts that both cases were run. Auditable, and much
+#             better than nothing, but it is an assertion about the verifier made
+#             by the same party that benefits from the verifier passing.
+#
+# The distinction is preserved in every output. A DECLARED oracle must never
+# silently appear equivalent to an EXECUTED one.
+QUALIFICATION_EXECUTED = "EXECUTED"
+QUALIFICATION_DECLARED = "DECLARED"
+QUALIFICATION_MODES = (QUALIFICATION_EXECUTED, QUALIFICATION_DECLARED)
+
+# Accepted spellings of the executed mode. `executable` was the v1.0.0 name and
+# remains valid so existing documents keep working; `executed` is canonical
+# because it describes what happened rather than what was possible.
+QUALIFICATION_MODE_ALIASES = {
+    "executed": QUALIFICATION_EXECUTED,
+    "executable": QUALIFICATION_EXECUTED,
+    "declared": QUALIFICATION_DECLARED,
+}
+
+# Claim-level assurance summary.
+ASSURANCE_EXECUTED = "EXECUTED"
+ASSURANCE_DECLARED = "DECLARED"
+ASSURANCE_MIXED = "MIXED"
+ASSURANCE_NONE = "NONE"
+
+# A DECLARED qualification must state why it is declared and why executable
+# qualification is unavailable. Both are assertions, so a short string is not
+# accepted: the reasoning has to be written down to be reviewable.
+MIN_DECLARED_RATIONALE_LENGTH = 40
+
 # --- Criticality defaults --------------------------------------------------
 # A claim matching any trigger token is critical by default. Matching is
 # case-insensitive substring matching, which errs toward classification as

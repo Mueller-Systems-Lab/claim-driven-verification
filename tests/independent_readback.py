@@ -145,6 +145,14 @@ def main() -> int:
             os.path.join(engine, "core", "cdv", "gates.py"),
             os.path.join(source, "core", "cdv", "gates.py"),
         ),
+        "engine_context": (
+            os.path.join(engine, "core", "cdv", "context.py"),
+            os.path.join(source, "core", "cdv", "context.py"),
+        ),
+        "context_canaries": (
+            os.path.join(engine, "tests", "lib", "context_canaries.py"),
+            os.path.join(source, "tests", "lib", "context_canaries.py"),
+        ),
         "schema": (
             os.path.join(engine, "schema", "verification.schema.json"),
             os.path.join(source, "schema", "verification.schema.json"),

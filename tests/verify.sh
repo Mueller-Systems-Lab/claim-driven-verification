@@ -2,7 +2,8 @@
 #
 # Full validation of the Claim-Driven Verification bootstrap repository.
 #
-#   ./tests/verify.sh [--no-e2e] [--model PROVIDER/MODEL] [--keep]
+#   ./tests/verify.sh [--no-e2e] [--model PROVIDER/MODEL] [--second-model M]
+#                       [--no-second-model] [--keep] [--verbose]
 #
 # This is the entry point that answers "does this repository actually work?".
 # It runs, in order:
@@ -37,13 +38,17 @@ fi
 
 RUN_E2E=1
 KEEP=0
+VERBOSE=0
 MODEL="${CDV_E2E_MODEL:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-e2e) RUN_E2E=0 ;;
     --model) MODEL="${2:-}"; shift ;;
+    --second-model) SECOND_MODEL="${2:-}"; shift ;;
+    --no-second-model) SECOND_MODEL="" ;;
     --keep) KEEP=1 ;;
+    --verbose) VERBOSE=1 ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -56,7 +61,16 @@ if [ -z "$PYTHON_BIN" ]; then echo "python3 is required" >&2; exit 3; fi
 BOOTSTRAP_VERSION="$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION")"
 
 R_STATIC=NOT_RUN; R_CANARY=NOT_RUN; R_EDGE=NOT_RUN; R_INSTALL=NOT_RUN
-R_E2E=NOT_RUN; R_READBACK=NOT_RUN; R_TARGET=NOT_RUN
+R_E2E=NOT_RUN; R_READBACK=NOT_RUN; R_TARGET=NOT_RUN; R_CONTEXT=NOT_RUN
+R_SECOND=NOT_RUN
+CTX_POSITIVE=NOT_RUN; CTX_WRONG_PWD=NOT_RUN; CTX_WRONG_REPO=NOT_RUN
+CTX_STALE=NOT_RUN; CTX_GUARD_INACTIVE=NOT_RUN; CTX_ENFORCEMENT_PATH=NOT_RUN
+OR_EXECUTED=NOT_RUN; OR_ALWAYS_PASS=NOT_RUN; OR_CRASHING=NOT_RUN
+OR_DECLARED=NOT_RUN; OR_DECLARED_INCOMPLETE=NOT_RUN; OR_MASQUERADE=NOT_RUN
+GRAB_TARGET=NOT_RUN; GRAB_CONTEXT=NOT_RUN; GRAB_HOOKS=NOT_RUN
+GRAB_NEG=NOT_RUN; GRAB_POS=NOT_RUN; GRAB_EDIT=NOT_RUN; GRAB_FAKE=NOT_RUN
+GRAB_ANTITAMPER=NOT_RUN; GRAB_REALCOMMIT=NOT_RUN
+SECOND_PROVIDER=NOT_RUN
 POSITIVE=UNKNOWN; NEGATIVE=UNKNOWN
 D_INDEP=NOT_OBSERVED; D_ORACLE=NOT_OBSERVED; D_CONFLICT=NOT_OBSERVED
 D_FRESH=NOT_OBSERVED; D_RESIDUAL=NOT_OBSERVED
@@ -154,6 +168,38 @@ for pair in "INDEPENDENCE:$D_INDEP" "ORACLE_QUALIFICATION:$D_ORACLE" \
 done
 
 # ---------------------------------------------------------------------------
+section "3b/6  VERIFICATION CONTEXT INTEGRITY"
+# The canaries for the observer. A behavioural result may not be interpreted
+# until the verifier has shown it is watching the intended target; these cases
+# are the v1.0.0 false PASS and its neighbours.
+CONTEXT_LOG="$(mktemp "${TMPDIR:-/tmp}/cdv-context-XXXXXX")"
+if "$PYTHON_BIN" "${REPO_ROOT}/tests/lib/context_canaries.py" > "$CONTEXT_LOG" 2>&1; then
+  R_CONTEXT=PASS
+else
+  R_CONTEXT=FAIL; note_fail "context integrity canaries"
+fi
+sed 's/^/  /' "$CONTEXT_LOG" | grep -E 'CONTEXT_|WRONG_|STALE_|GUARD_INACTIVE_' || true
+CTX_POSITIVE="$(grep -m1 '^CONTEXT_POSITIVE_CANARY=' "$CONTEXT_LOG" | cut -d= -f2)"
+CTX_WRONG_PWD="$(grep -m1 '^WRONG_PWD_REGRESSION=' "$CONTEXT_LOG" | cut -d= -f2)"
+CTX_WRONG_REPO="$(grep -m1 '^WRONG_REPOSITORY_CANARY=' "$CONTEXT_LOG" | cut -d= -f2)"
+CTX_STALE="$(grep -m1 '^STALE_CONTEXT_CANARY=' "$CONTEXT_LOG" | cut -d= -f2)"
+CTX_GUARD_INACTIVE="$(grep -m1 '^GUARD_INACTIVE_CANARY=' "$CONTEXT_LOG" | cut -d= -f2)"
+CTX_ENFORCEMENT_PATH="$(grep -m1 '^ENFORCEMENT_PATH_CANARY=' "$CONTEXT_LOG" | cut -d= -f2)"
+[ "$R_CONTEXT" = "PASS" ] || sed 's/^/       /' "$CONTEXT_LOG" | tail -25 >&2
+rm -f "$CONTEXT_LOG"
+
+# --- oracle qualification verdicts -----------------------------------------
+EDGE_LOG="$(mktemp "${TMPDIR:-/tmp}/cdv-edge-XXXXXX")"
+"$PYTHON_BIN" "${REPO_ROOT}/tests/lib/edge_cases.py" > "$EDGE_LOG" 2>&1 || true
+OR_EXECUTED="$(grep -m1 '^ORACLE_EXECUTED_MODE=' "$EDGE_LOG" | cut -d= -f2)"
+OR_ALWAYS_PASS="$(grep -m1 '^ORACLE_ALWAYS_PASS_CANARY=' "$EDGE_LOG" | cut -d= -f2)"
+OR_CRASHING="$(grep -m1 '^ORACLE_CRASHING_CANARY=' "$EDGE_LOG" | cut -d= -f2)"
+OR_DECLARED="$(grep -m1 '^ORACLE_DECLARED_MODE=' "$EDGE_LOG" | cut -d= -f2)"
+OR_DECLARED_INCOMPLETE="$(grep -m1 '^ORACLE_DECLARED_INCOMPLETE_CANARY=' "$EDGE_LOG" | cut -d= -f2)"
+OR_MASQUERADE="$(grep -m1 '^ORACLE_MASQUERADE_CANARY=' "$EDGE_LOG" | cut -d= -f2)"
+rm -f "$EDGE_LOG"
+
+# ---------------------------------------------------------------------------
 section "4/6  CLEAN TARGET BOOTSTRAP"
 TARGET="$(mktemp -d "${TMPDIR:-/tmp}/cdv-verify-target-XXXXXX")"
 if ! git -C "$TARGET" init -q 2>/dev/null; then
@@ -205,12 +251,56 @@ else
     printf '  %serr%s  no model available; pass --model\n' "$C_RED" "$C_RESET"
     R_E2E=UNVERIFIABLE; note_fail "no canary model"
   else
-    printf '  %s--%s   canary model: %s\n' "$C_DIM" "$C_RESET" "$MODEL"
+    printf '  %s--%s   primary canary model: %s\n' "$C_DIM" "$C_RESET" "$MODEL"
+    PRIMARY_LOG="$(mktemp "${TMPDIR:-/tmp}/cdv-primary-XXXXXX")"
+    E2E_ARGS=(--project "$TARGET" --model "$MODEL" --timeout "${CDV_E2E_TIMEOUT:-240}")
+    [ "$VERBOSE" -eq 1 ] && E2E_ARGS+=(--verbose)
     if "$PYTHON_BIN" "${REPO_ROOT}/tests/e2e/enforcement_canary.py" \
-         --project "$TARGET" --model "$MODEL" --timeout "${CDV_E2E_TIMEOUT:-240}"; then
+         "${E2E_ARGS[@]}" --provider-label "$MODEL" > "$PRIMARY_LOG" 2>&1; then
       R_E2E=PASS
     else
-      R_E2E=FAIL; note_fail "guard enforcement end to end"
+      R_E2E=FAIL; note_fail "guard enforcement end to end (primary provider)"
+    fi
+    tail -30 "$PRIMARY_LOG"
+    grab() { grep -m1 "^$1=" "$PRIMARY_LOG" | cut -d= -f2-; }
+    GRAB_TARGET="$(grab TARGET_IDENTITY)"
+    GRAB_CONTEXT="$(grab CONTEXT_PROOF)"
+    GRAB_HOOKS="$(grab GUARD_HOOKS)"
+    GRAB_NEG="$(grab NEGATIVE_ACTION)"
+    GRAB_POS="$(grab POSITIVE_ACTION)"
+    GRAB_EDIT="$(grab STATE_EDIT_NOT_BLOCKED)"
+    GRAB_FAKE="$(grab UNDESERVED_PASS_BLOCKED)"
+    GRAB_ANTITAMPER="$(grab ANTI_TAMPER)"
+    GRAB_REALCOMMIT="$(grab REAL_COMMIT_CANARY)"
+    rm -f "$PRIMARY_LOG"
+
+    # --- second provider -------------------------------------------------
+    # The guard is intended to be model-independent. Whether it is cannot be
+    # argued from the source; it has to be run against a second model. Only
+    # providers already authorised at zero marginal cost are used, so this
+    # demonstrates diversity without introducing paid external usage.
+    if [ -z "$SECOND_MODEL" ]; then
+      printf '  %swarn%s no second provider configured; recorded as residual uncertainty\n' \
+        "$C_YELLOW" "$C_RESET"
+      R_SECOND=NOT_CONFIGURED
+    elif ! timeout 120 opencode run --auto --agent build -m "$SECOND_MODEL" \
+           "Reply with the single word READY." >/dev/null 2>&1; then
+      printf '  %swarn%s second provider %s is not reachable or not authorised; recorded as residual uncertainty\n' \
+        "$C_YELLOW" "$C_RESET" "$SECOND_MODEL"
+      R_SECOND=BLOCKED_EXTERNAL_AVAILABILITY
+    else
+      printf '  %s--%s   second canary model: %s\n' "$C_DIM" "$C_RESET" "$SECOND_MODEL"
+      SECOND_LOG="$(mktemp "${TMPDIR:-/tmp}/cdv-second-XXXXXX")"
+      if "$PYTHON_BIN" "${REPO_ROOT}/tests/e2e/enforcement_canary.py" \
+           --project "$TARGET" --model "$SECOND_MODEL" \
+           --timeout "${CDV_E2E_TIMEOUT:-240}" --provider-label "$SECOND_MODEL" \
+           > "$SECOND_LOG" 2>&1; then
+        R_SECOND=PASS
+      else
+        R_SECOND=FAIL; note_fail "guard enforcement end to end (second provider)"
+      fi
+      tail -25 "$SECOND_LOG"
+      rm -f "$SECOND_LOG"
     fi
   fi
 fi
@@ -243,9 +333,37 @@ else
   [ -n "$TARGET" ] && rm -rf "$TARGET" "${TARGET}.install.log"
 fi
 
+# The second provider is required only to the extent that it is available. If it
+# could not be reached, that is recorded as residual uncertainty rather than
+# treated as success or as failure; if it ran and failed, the bootstrap fails.
+ANTI_TAMPER_COVERED=1
+if [ "$R_E2E" = "PASS" ] && [ "$GRAB_ANTITAMPER" != "REFUSED_AND_RECORDED" ]; then
+  printf '  %serr%s  the anti-tamper refusal path was never exercised (ANTI_TAMPER=%s)\n' \
+    "$C_RED" "$C_RESET" "${GRAB_ANTITAMPER:-MISSING}"
+  printf '       A model that declines to attempt a write leaves the path untested.\n'
+  printf '       Refusing to report the release as verified on untested enforcement.\n'
+  ANTI_TAMPER_COVERED=0
+  note_fail "anti-tamper refusal path not exercised"
+fi
+if [ "$R_E2E" = "PASS" ] && [ "$GRAB_REALCOMMIT" != "REFUSED_AND_RECORDED" ]; then
+  printf '  %serr%s  a real commit was never provoked (REAL_COMMIT_CANARY=%s)\n' \
+    "$C_RED" "$C_RESET" "${GRAB_REALCOMMIT:-MISSING}"
+  printf '       The default completion-command policy was not exercised end to end.\n'
+  ANTI_TAMPER_COVERED=0
+  note_fail "default completion policy not exercised end to end"
+fi
+
+SECOND_OK=1
+case "$R_SECOND" in
+  PASS|NOT_CONFIGURED|BLOCKED_EXTERNAL_AVAILABILITY|NOT_RUN) SECOND_OK=1 ;;
+  *) SECOND_OK=0 ;;
+esac
+
 BOOTSTRAP=FAIL
 if [ "$R_STATIC" = "PASS" ] && [ "$R_CANARY" = "PASS" ] && [ "$R_EDGE" = "PASS" ] \
-   && [ "$R_INSTALL" = "PASS" ] && [ "$R_E2E" = "PASS" ] && [ "$R_READBACK" = "PASS" ] \
+   && [ "$R_CONTEXT" = "PASS" ] && [ "$R_INSTALL" = "PASS" ] \
+   && [ "$R_E2E" = "PASS" ] && [ "$R_READBACK" = "PASS" ] \
+   && [ "$SECOND_OK" -eq 1 ] && [ "$ANTI_TAMPER_COVERED" -eq 1 ] \
    && [ "${#fails[@]}" -eq 0 ]; then
   BOOTSTRAP=PASS
 fi
@@ -275,27 +393,57 @@ ${C_BOLD}=======================================================================
 ${C_BOLD}FINAL REPORT${C_RESET}
 ${C_BOLD}========================================================================${C_RESET}
 FINAL_CLASSIFICATION=${CLASSIFICATION}
-BOOTSTRAP_REPOSITORY=claim-driven-verification
-BOOTSTRAP_VERSION=${BOOTSTRAP_VERSION}
+VERSION=${BOOTSTRAP_VERSION}
+FINAL_HEAD=${FINAL_HEAD}
+WORKTREE=${WORKTREE_STATE}
+PREFLIGHT=PASS
 OPEN_CODE_RUNTIME=${OPENCODE_RUNTIME}:${OPENCODE_VERSION}
+--
+CONTEXT_INTEGRITY_GATE=${R_CONTEXT}
+CONTEXT_POSITIVE_CANARY=${CTX_POSITIVE}
+WRONG_PWD_REGRESSION=${CTX_WRONG_PWD}
+WRONG_REPOSITORY_CANARY=${CTX_WRONG_REPO}
+STALE_CONTEXT_CANARY=${CTX_STALE}
+GUARD_INACTIVE_CANARY=${CTX_GUARD_INACTIVE}
+WRONG_ENFORCEMENT_PATH_CANARY=${CTX_ENFORCEMENT_PATH}
+--
+ORACLE_EXECUTED_MODE=${OR_EXECUTED}
+ORACLE_DECLARED_MODE=${OR_DECLARED}
+ALWAYS_PASS_ORACLE_CANARY=${OR_ALWAYS_PASS}
+CRASHING_ORACLE_CANARY=${OR_CRASHING}
+DECLARED_INCOMPLETE_CANARY=${OR_DECLARED_INCOMPLETE}
+ORACLE_MASQUERADE_CANARY=${OR_MASQUERADE}
+ORACLE_QUALIFICATION_GATE=${D_ORACLE}
+--
+INDEPENDENCE_GATE=${D_INDEP}
+CONFLICT_GATE=${D_CONFLICT}
+FRESHNESS_GATE=${D_FRESH}
+RESIDUAL_UNCERTAINTY_GATE=${D_RESIDUAL}
+--
+TARGET_IDENTITY=${GRAB_TARGET}
+CONTEXT_PROOF=${GRAB_CONTEXT}
+GUARD_HOOK_PROOF=${GRAB_HOOKS}
+REAL_ACTION_BLOCK=${GRAB_NEG}
+ANTI_TAMPER_BLOCK=${GRAB_ANTITAMPER}
+REAL_COMMIT_CANARY=${GRAB_REALCOMMIT}
+REAL_ACTION_ALLOW=${GRAB_POS}
+STATE_EDIT_NOT_BLOCKED=${GRAB_EDIT}
+UNDESERVED_PASS_BLOCKED=${GRAB_FAKE}
 PLUGIN_OR_GUARD_STATUS=$([ "$R_E2E" = "PASS" ] && echo "ACTIVE_AND_ENFORCING" || echo "INSTALLED_UNVERIFIED")
+--
+PRIMARY_PROVIDER_CANARY=${R_E2E}
+SECOND_PROVIDER=${SECOND_MODEL:-none}
+SECOND_PROVIDER_CANARY=${R_SECOND}
+--
 SCHEMA_STATUS=${SCHEMA_STATUS}
 INSTALLER_STATUS=${R_INSTALL}
 POSITIVE_CANARY=${POSITIVE}
 NEGATIVE_CANARY=${NEGATIVE}
-INDEPENDENCE_GATE=${D_INDEP}
-ORACLE_QUALIFICATION_GATE=${D_ORACLE}
-CONFLICT_GATE=${D_CONFLICT}
-FRESHNESS_GATE=${D_FRESH}
-RESIDUAL_UNCERTAINTY_GATE=${D_RESIDUAL}
 REAL_TARGET_BOOTSTRAP=${R_TARGET}
 INDEPENDENT_READBACK=${R_READBACK}
-GUARD_ENFORCEMENT_E2E=${R_E2E}
 STATIC_CHECKS=${R_STATIC}
 EDGE_CASES_AND_FAULT_INJECTION=${R_EDGE}
 CANARY_SUITE=${R_CANARY}
-WORKTREE=${WORKTREE_STATE}
-FINAL_HEAD=${FINAL_HEAD}
 APPLICATION_COMPLETE=$([ "$BOOTSTRAP" = "PASS" ] && echo YES || echo NO)
 ${C_BOLD}VERIFICATION_BOOTSTRAP=${BOOTSTRAP}${C_RESET}
 ${C_BOLD}========================================================================${C_RESET}

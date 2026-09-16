@@ -49,6 +49,10 @@ the gate is not PASS.
 ## What "verifying the installation" means here
 
 ```
+CONTEXT CANARIES  15 cases (3 positive, 12 negative), including the
+                  permanent reproduction of the v1.0.0 wrong-PWD
+                  false PASS: each must fail, naming the indicator
+                  it violated
 POSITIVE CANARY   a complete, correctly evidenced claim set   -> must PASS
 NEGATIVE CANARIES fourteen defect cases built from thirteen
                   distinct single mutations: each differs from
@@ -93,6 +97,7 @@ rule with a stable identifier and a canary that proves it fires.
 | Requirement | Rule when violated |
 | --- | --- |
 | Failure modes are declared | `CRITICAL_CLAIM_WITHOUT_FAILURE_MODES` |
+| Wrong observation context is refused (v1.0.1) | `CONTEXT_PROOF_MISSING` / `CONTEXT_CONTRADICTION` |
 | Every failure mode has an oracle | `FAILURE_MODE_WITHOUT_ORACLE` |
 | Every oracle exists | `ORACLE_UNDEFINED` |
 | Every oracle is qualified, known-good **and known-bad** | `ORACLE_NOT_QUALIFIED` |
@@ -123,6 +128,40 @@ generation axis (`model`, `implementation`, `runtime`) and the observation axis
 and counts for nothing, because naming two tools differently is the cheapest way
 to fake rigour. Grades are qualitative — LOW / MEDIUM / HIGH — with no invented
 probability, because no empirical calibration exists to justify a number.
+
+### Context integrity comes before interpretation
+
+Added in v1.0.1, after a real false PASS. A verification result is invalid until
+the verifier establishes that it is observing the intended target, execution
+context and enforcement path. `cwd` and `PWD` are both inherited on process spawn
+and neither is sufficient on its own — `PWD` is specifically the trap, because a
+runtime may resolve its project from it while the real working directory says
+something else. At least one agreeing indicator must come from somebody other than
+the party asserting the context: the runtime's own reported project, a per-run
+marker nonce, or the guard's audit log.
+
+Any contradiction is fatal, and the end-to-end canary **aborts before reading any
+behavioural result** if context cannot be proven. It does not report those results
+as passing and does not report them as failing; it declines to interpret them.
+
+> Absence of change is not proof of blocking until context integrity is
+> established.
+
+The full incident record is [`spec/regression-v1.0.0-false-pass.md`](spec/regression-v1.0.0-false-pass.md).
+
+### Oracle qualification has two modes, and they are not interchangeable
+
+| Mode | Meaning | Requires |
+| --- | --- | --- |
+| `EXECUTED` | the engine ran both cases and observed the results | commands, plus `--allow-execute-oracles` |
+| `DECLARED` | the project asserts both cases were run | a rationale and a stated reason execution is impossible |
+
+`DECLARED` is auditable and far better than nothing, but it is an assertion about
+the verifier made by the party that benefits from it passing, so it is marked, it
+requires a reason, and it produces an explicit assurance downgrade
+(`ORACLE_ASSURANCE_DEGRADED`) that stays visible in the result. A critical claim
+may not lean on a `DECLARED` oracle where execution is technically possible, and
+an unexecuted `EXECUTED` oracle is refused rather than silently downgraded.
 
 ### Criticality cannot be downgraded away
 
@@ -230,11 +269,17 @@ examples/      worked examples
 bin/cdv        repository-local launcher
 ```
 
-Validate everything:
+Validate everything, including a second provider:
 
 ```bash
-./tests/verify.sh --model deepseek/deepseek-flash
+./tests/verify.sh --model deepseek/deepseek-flash \
+                  --second-model zai-coding-plan/glm-4.7
 ```
+
+`--second-model` is the runtime-diversity canary. Only providers already
+authorised at zero marginal cost are used. If none is reachable the report says
+`SECOND_PROVIDER_CANARY=BLOCKED_EXTERNAL_AVAILABILITY` and keeps it as residual
+uncertainty rather than claiming a success that did not happen.
 
 ## Design principles
 

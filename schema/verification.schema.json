@@ -137,14 +137,26 @@
       }
     },
     "qualification": {
-      "description": "Evidence that the oracle itself works. Required for every oracle carrying a critical claim. The known-bad case is the load-bearing half: an oracle never shown to reject a wrong result is not evidence.",
+      "description": "Evidence that the oracle itself works. Required for every oracle carrying a critical claim. The known-bad case is the load-bearing half: an oracle never shown to reject a wrong result is not evidence. Two modes exist and are NOT interchangeable. EXECUTED means the engine ran both cases and observed the results. DECLARED means the project asserts they were run; it is auditable and far better than nothing, but it is an assertion about the verifier made by the party that benefits from the verifier passing, so it requires a rationale, a statement of why executing is unavailable, and it produces an explicit assurance downgrade on the claim. The two are kept distinct in every output.",
       "type": "object",
       "additionalProperties": true,
       "properties": {
         "mode": {
-          "description": "declared: the project asserts the cases were run. executable: cdv runs the supplied commands and reads the marker from their output. executable mode requires --allow-execute-oracles, otherwise the oracle is reported unverified and blocks critical claims.",
+          "description": "EXECUTED: cdv runs both commands and reads the markers from their output; requires --allow-execute-oracles, and is refused rather than downgraded if execution is not permitted. DECLARED: both cases are asserted. The v1.0.0 spelling 'executable' is accepted and means EXECUTED.",
           "type": "string",
-          "enum": ["declared", "executable"]
+          "enum": ["EXECUTED", "executed", "executable", "DECLARED", "declared"]
+        },
+        "rationale": {
+          "description": "Required for DECLARED. At least 40 characters. Why the cases are declared rather than executed.",
+          "type": "string"
+        },
+        "executable_unavailable_because": {
+          "description": "Required for DECLARED. At least 40 characters. Why executing the oracle is not technically possible. A critical claim may not rely on a declared oracle without this, because the engine cannot otherwise distinguish 'cannot execute' from 'chose not to'.",
+          "type": "string"
+        },
+        "executable_feasible": {
+          "description": "Set true only to state that execution WAS technically possible and was not done. This is refused: a critical claim must not rely on the weaker mode when the stronger one was available.",
+          "type": "boolean"
         },
         "positive_case": {
           "type": "object",
@@ -169,11 +181,11 @@
           }
         },
         "positive_command": {
-          "description": "Only honoured in executable mode. Must exit 0 and print a line starting CDV_ORACLE_POSITIVE=PASS.",
+          "description": "Only honoured in EXECUTED mode. Must exit 0 and print a line starting CDV_ORACLE_POSITIVE=PASS. Declaring EXECUTED without both commands is refused as a masquerade.",
           "type": "string"
         },
         "negative_command": {
-          "description": "Only honoured in executable mode. Must exit 0 and print a line starting CDV_ORACLE_NEGATIVE=DETECTED.",
+          "description": "Only honoured in EXECUTED mode. Must exit 0 and print a line starting CDV_ORACLE_NEGATIVE=DETECTED. A non-zero exit is a refusal to qualify, not a detection: an oracle that crashes instead of reporting is not trusted.",
           "type": "string"
         }
       }

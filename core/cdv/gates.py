@@ -71,7 +71,13 @@ from .errors import (
     RULE_NONCRITICAL_MISSING_RATIONALE,
     RULE_ORACLE_KIND_INVALID,
     RULE_ORACLE_NOT_QUALIFIED,
+    RULE_ORACLE_ASSURANCE_DEGRADED,
+    RULE_ORACLE_DECLARED_MISSING_FEASIBILITY,
+    RULE_ORACLE_DECLARED_MISSING_RATIONALE,
+    RULE_ORACLE_EXECUTABLE_FEASIBLE_BUT_DECLARED,
+    RULE_ORACLE_EXECUTED_WITHOUT_COMMANDS,
     RULE_ORACLE_QUALIFICATION_BLOCKED,
+    RULE_ORACLE_QUALIFICATION_MODE_INVALID,
     RULE_ORACLE_QUALIFICATION_UNVERIFIED,
     RULE_ORACLE_UNDEFINED,
     RULE_RESIDUAL_UNCERTAINTY_MISSING,
@@ -151,6 +157,9 @@ class ClaimResult:
     coverage: dict[str, Any] = field(default_factory=dict)
     residual_uncertainty: list[str] = field(default_factory=list)
     oracles_used: list[str] = field(default_factory=list)
+    # EXECUTED | DECLARED | MIXED | NONE -- how strongly the oracles carrying
+    # this claim were themselves verified.
+    oracle_assurance: str = model.ASSURANCE_NONE
     evidence_count: int = 0
     passing_evidence: list[str] = field(default_factory=list)
 
@@ -168,6 +177,7 @@ class ClaimResult:
             "status": self.status,
             "downgraded": self.downgraded,
             "oracles_used": self.oracles_used,
+            "oracle_assurance": self.oracle_assurance,
             "evidence_count": self.evidence_count,
             "passing_evidence": self.passing_evidence,
             "independence": self.independence,
@@ -228,24 +238,33 @@ def _qualify_executable(
     """
     qual = _mapping(definition.get("qualification"))
 
+    missing_commands = [
+        key for key in ("positive_command", "negative_command") if not _text(qual.get(key))
+    ]
+    if missing_commands:
+        # Declaring EXECUTED while supplying nothing to execute is the one way a
+        # DECLARED qualification could masquerade as an executed one. Caught
+        # before anything runs, under its own rule, so the distinction stays
+        # visible instead of being folded into a generic failure.
+        findings.append(
+            Finding(
+                rule=RULE_ORACLE_EXECUTED_WITHOUT_COMMANDS,
+                severity=ERROR,
+                message=(
+                    f"oracle '{oracle_id}' declares qualification mode EXECUTED but "
+                    f"supplies no {missing_commands}; a declared case cannot be "
+                    "presented as an executed one"
+                ),
+                subject=oracle_id,
+            )
+        )
+        return
+
     for label, command_key, marker, expected in (
         ("positive_case", "positive_command", "CDV_ORACLE_POSITIVE=", model.QUAL_PASS),
         ("negative_case", "negative_command", "CDV_ORACLE_NEGATIVE=", model.QUAL_DETECTED),
     ):
         command = _text(qual.get(command_key))
-        if not command:
-            findings.append(
-                Finding(
-                    rule=RULE_ORACLE_QUALIFICATION_BLOCKED,
-                    severity=ERROR,
-                    message=(
-                        f"oracle '{oracle_id}' declares mode: executable but has no "
-                        f"{command_key}; the {label} cannot be executed"
-                    ),
-                    subject=oracle_id,
-                )
-            )
-            continue
         try:
             proc = subprocess.run(  # noqa: S602 - documented, opt-in, project-owned
                 command,
@@ -356,26 +375,118 @@ def qualify_oracle(
         )
         return {"id": oracle_id, "kind": kind, "qualified": False}
 
-    mode = _text(qual.get("mode")) or "declared"
-    if mode == "executable":
+    mode_raw = _text(qual.get("mode")) or "declared"
+    mode = model.QUALIFICATION_MODE_ALIASES.get(mode_raw.lower())
+    if mode is None:
+        findings.append(
+            Finding(
+                rule=RULE_ORACLE_QUALIFICATION_MODE_INVALID,
+                severity=ERROR,
+                message=(
+                    f"oracle '{oracle_id}' declares qualification mode {mode_raw!r}; "
+                    f"expected one of {list(model.QUALIFICATION_MODES)} "
+                    "(the v1.0.0 spelling 'executable' is still accepted and means "
+                    "EXECUTED)"
+                ),
+                subject=oracle_id,
+            )
+        )
+        return {"id": oracle_id, "kind": kind, "qualified": False, "mode": None}
+
+    if mode == model.QUALIFICATION_EXECUTED:
         if not allow_execute:
             findings.append(
                 Finding(
                     rule=RULE_ORACLE_QUALIFICATION_UNVERIFIED,
                     severity=ERROR,
                     message=(
-                        f"oracle '{oracle_id}' requires executable qualification but "
+                        f"oracle '{oracle_id}' declares EXECUTED qualification but "
                         "oracle execution is not permitted in this run; re-run with "
-                        "--allow-execute-oracles to certify it"
+                        "--allow-execute-oracles to certify it. It is not downgraded "
+                        "to DECLARED, because that would silently accept a weaker "
+                        "assurance than the document asks for."
                     ),
                     subject=oracle_id,
                 )
             )
-            return {"id": oracle_id, "kind": kind, "qualified": False, "mode": mode}
+            return {
+                "id": oracle_id,
+                "kind": kind,
+                "qualified": False,
+                "mode": mode,
+            }
         _qualify_executable(oracle_id, definition, project_dir, findings)
         return {"id": oracle_id, "kind": kind, "qualified": True, "mode": mode}
 
-    # Declared mode: the project states that the cases were run.
+    # --- DECLARED: the project asserts the cases were run -------------------
+    # Auditable, and much better than nothing, but it is an assertion about the
+    # verifier made by the party that benefits from the verifier passing. So it
+    # must say why it is declared and why executing is not possible, and the
+    # claim that relies on it carries an explicit assurance downgrade.
+    declared_problems: list[str] = []
+
+    rationale = _text(qual.get("rationale"))
+    if len(rationale) < model.MIN_DECLARED_RATIONALE_LENGTH:
+        declared_problems.append(
+            f"no adequate rationale ({len(rationale)} chars, needs "
+            f">= {model.MIN_DECLARED_RATIONALE_LENGTH})"
+        )
+
+    infeasible = _text(qual.get("executable_unavailable_because"))
+    if len(infeasible) < model.MIN_DECLARED_RATIONALE_LENGTH:
+        declared_problems.append(
+            f"no adequate executable_unavailable_because ({len(infeasible)} chars, "
+            f"needs >= {model.MIN_DECLARED_RATIONALE_LENGTH})"
+        )
+
+    if declared_problems:
+        # Two distinct rules, because the two omissions mean different things. A
+        # missing rationale is an unexplained assertion. A missing statement of
+        # infeasibility is stronger: it is the case where the project has not
+        # shown that it could not have produced executed evidence instead, which
+        # is exactly what the preferred policy forbids.
+        findings.append(
+            Finding(
+                rule=(
+                    RULE_ORACLE_DECLARED_MISSING_FEASIBILITY
+                    if len(infeasible) < model.MIN_DECLARED_RATIONALE_LENGTH
+                    else RULE_ORACLE_DECLARED_MISSING_RATIONALE
+                ),
+                severity=ERROR,
+                message=(
+                    f"oracle '{oracle_id}' DECLARED qualification is incomplete: "
+                    + "; ".join(declared_problems)
+                    + (
+                        ". A critical claim may not rely on a declared oracle unless "
+                        "executing it is genuinely not possible, and that has to be "
+                        "stated with a reviewable reason"
+                        if len(infeasible) < model.MIN_DECLARED_RATIONALE_LENGTH
+                        else ""
+                    )
+                ),
+                subject=oracle_id,
+            )
+        )
+        return {"id": oracle_id, "kind": kind, "qualified": False, "mode": mode}
+
+    # A project that admits execution was possible but chose not to is refusing
+    # the stronger evidence it could have had. That is a distinct, more serious
+    # finding than merely not being able to execute.
+    if qual.get("executable_feasible") is True:
+        findings.append(
+            Finding(
+                rule=RULE_ORACLE_EXECUTABLE_FEASIBLE_BUT_DECLARED,
+                severity=ERROR,
+                message=(
+                    f"oracle '{oracle_id}' is DECLARED while the document states "
+                    "executable qualification was feasible; a critical claim must "
+                    "not rely on the weaker mode when the stronger one was available"
+                ),
+                subject=oracle_id,
+            )
+        )
+        return {"id": oracle_id, "kind": kind, "qualified": False, "mode": mode}
+
     positive = _mapping(qual.get("positive_case"))
     negative = _mapping(qual.get("negative_case"))
     pos_result = _text(positive.get("result"))
@@ -725,18 +836,59 @@ def _evaluate_claim(
             oracle_ids.append(oid)
     result.oracles_used = oracle_ids
 
-    # Qualification findings are emitted as a side effect; the result itself is
-    # not carried forward, because "is this oracle qualified" is decided once and
-    # never re-consulted. A local that is written and never read invites a reader
-    # to believe a decision depends on it.
+    # Qualification outcomes are kept rather than discarded: the mode of each
+    # oracle decides the claim's assurance level, and a DECLARED-only critical
+    # claim must carry an explicit downgrade.
+    qualification: dict[str, dict[str, Any] | None] = {}
     for oid in oracle_ids:
-        qualify_oracle(
+        qualification[oid] = qualify_oracle(
             oid,
             oracles,
             project_dir,
             required=is_critical,
             allow_execute=allow_execute,
             findings=findings,
+        )
+
+    modes = {
+        result.get("mode")
+        for result in qualification.values()
+        if isinstance(result, dict) and result.get("mode")
+    }
+    if not modes:
+        result.oracle_assurance = model.ASSURANCE_NONE
+    elif modes == {model.QUALIFICATION_EXECUTED}:
+        result.oracle_assurance = model.ASSURANCE_EXECUTED
+    elif modes == {model.QUALIFICATION_DECLARED}:
+        result.oracle_assurance = model.ASSURANCE_DECLARED
+    else:
+        result.oracle_assurance = model.ASSURANCE_MIXED
+
+    if is_critical and result.oracle_assurance == model.ASSURANCE_DECLARED:
+        # The claim is supported, but only by oracles whose qualification is an
+        # assertion rather than an execution. Recorded, never silent.
+        findings.append(
+            Finding(
+                rule=RULE_ORACLE_ASSURANCE_DEGRADED,
+                severity=WARNING,
+                message=(
+                    "every oracle carrying this critical claim is DECLARED-qualified: "
+                    "the project asserts that the known-good and known-bad cases were "
+                    "run, and the engine did not observe them. The claim can pass, but "
+                    "its oracle assurance is EXECUTED=no, and that must not be read as "
+                    "equivalent to an executed qualification"
+                ),
+                detail={
+                    "assurance": result.oracle_assurance,
+                    "oracles": sorted(oracle_ids),
+                },
+            )
+        )
+        result.residual_uncertainty.append(
+            "oracle qualification for this critical claim is DECLARED, not EXECUTED: "
+            "the accepting and rejecting behaviour of "
+            f"{sorted(oracle_ids)} is asserted by the project rather than observed by "
+            "the engine"
         )
 
     # --- evidence validity -------------------------------------------------

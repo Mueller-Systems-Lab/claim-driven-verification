@@ -40,29 +40,14 @@ The known-bad case is the load-bearing half. Showing that an oracle accepts a
 correct input shows that it can run. Showing that it *rejects* a deliberately
 incorrect input is the only thing that shows it can distinguish.
 
-### Declared qualification
+The two modes are named for what happened, not for what was possible, and they
+are deliberately **not** interchangeable.
+
+### EXECUTED qualification
 
 ```yaml
 qualification:
-  mode: declared
-  positive_case:
-    description: the real artifact is present
-    result: PASS
-  negative_case:
-    description: the artifact was removed; the oracle must notice
-    result: DETECTED
-```
-
-The project asserts that both cases were run. This is auditable and cheap, but it
-is an assertion, so the report records that the oracle was qualified in
-`declared` mode — the residual weakness stays visible rather than being rounded
-away.
-
-### Executable qualification
-
-```yaml
-qualification:
-  mode: executable
+  mode: EXECUTED
   positive_command: python3 tools/check_pdf.py --expect good
   negative_command: python3 tools/check_pdf.py --expect corrupt
 ```
@@ -84,20 +69,78 @@ the `mutation testing / fault injection / deliberate corruption / malformed
 artifacts / stale-state injection / wrong-value injection / missing-effect
 injection` requirement means in practice.
 
+### DECLARED qualification
+
+```yaml
+qualification:
+  mode: DECLARED
+  rationale: >
+    The oracles run against a live third-party sandbox that is not reachable
+    from the CI environment where this document is validated.
+  executable_unavailable_because: >
+    The sandbox requires credentials the CI job does not hold, so neither the
+    known-good nor the known-bad case can be executed here. Tracked in issue 4711;
+    re-run manually before each release.
+  positive_case:
+    description: the real artifact is present
+    result: PASS
+  negative_case:
+    description: the artifact was removed; the oracle must notice
+    result: DETECTED
+```
+
+The project asserts that both cases were run. This is auditable and cheap, and it
+is far better than nothing — but it is an assertion about the verifier made by
+the party that benefits from the verifier passing, so it carries three
+obligations:
+
+- **It must be marked.** The mode is preserved in the claim's assurance, in the
+  JSON, and in `CDV_ORACLE_QUALIFICATION_MODE` in the summary. A DECLARED oracle
+  never silently appears equivalent to an EXECUTED one.
+- **It must have a reason.** A rationale, and a statement of why executing is not
+  possible, each at least 40 characters. The reason has to be written down to be
+  reviewable; the engine cannot determine feasibility itself, so it requires the
+  project to state it.
+- **It must retain residual uncertainty.** A critical claim whose oracles are all
+  DECLARED gets `ORACLE_ASSURANCE_DEGRADED` recorded and an explicit residual
+  uncertainty entry naming the gap, in addition to whatever the project records
+  itself.
+
 ### Execution is opt-in
 
 Running commands taken from a project's configuration file is a real capability,
 so it is granted deliberately rather than assumed. Without
-`--allow-execute-oracles`, an oracle declaring `mode: executable` is reported
+`--allow-execute-oracles`, an oracle declaring `EXECUTED` is reported
 `ORACLE_QUALIFICATION_UNVERIFIED` and **blocks the critical claim**.
 
-That is the fail-closed direction on purpose. The alternative — silently treating
-an unexecuted oracle as qualified — would mean the strongest form of
-qualification was the one you could get without doing anything.
+Note what it is *not* downgraded to. An unexecuted `EXECUTED` oracle is not
+quietly treated as `DECLARED`: that would mean the document received weaker
+assurance than it asked for, which is a silent substitution. Refusing is the
+fail-closed direction, and `DECLARED` remains available to any project that
+chooses it explicitly.
 
-Note the comparison: refusing to run is *not* the same as refusing to qualify.
-`declared` mode remains available to projects that cannot or will not run oracle
-commands, and the report states which mode was used for every critical oracle.
+### A critical claim and a declared oracle
+
+> A critical claim must not rely solely on a `DECLARED`-qualified oracle if
+> executable qualification is technically feasible.
+
+Three rules implement this from three angles:
+
+| Rule | Fires when |
+| --- | --- |
+| `ORACLE_DECLARED_MISSING_FEASIBILITY` | DECLARED without stating why execution is impossible |
+| `ORACLE_DECLARED_MISSING_RATIONALE` | DECLARED without a stated rationale |
+| `ORACLE_EXECUTABLE_FEASIBLE_BUT_DECLARED` | the document admits execution was feasible and declared anyway |
+
+The third is the sharpest: a project that states `executable_feasible: true` has
+said that stronger evidence was available and was not produced. That is refused
+rather than warned about.
+
+Where a claim has at least one `EXECUTED` oracle, its assurance is `MIXED` or
+`EXECUTED`, and the stronger path is doing real work. Where every oracle is
+`DECLARED`, the claim can still pass — the architecture does not pretend a
+project can always execute its oracles — but the weakness is written into the
+verification result and cannot be read past.
 
 ## What the engine records
 

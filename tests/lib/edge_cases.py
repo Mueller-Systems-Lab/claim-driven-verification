@@ -52,9 +52,11 @@ RED = "\033[31m"
 RESET = "\033[0m"
 
 failures: list[str] = []
+case_labels: list[str] = []
 
 
 def report(ok: bool, label: str, detail: str = "") -> bool:
+    case_labels.append(label)
     mark = f"{GREEN}ok{RESET}" if ok else f"{RED}FAIL{RESET}"
     print(f"  {mark}   {label}" + (f"\n         {detail}" if detail and not ok else ""))
     if not ok:
@@ -312,6 +314,14 @@ def test_positive_paths() -> None:
         "description": "render the artifact to an image and inspect what is visible",
         "qualification": {
             "mode": "declared",
+            "rationale": (
+                "This test constructs the oracle inline and runs on machines where a "
+                "rendering stack is not guaranteed to be present."
+            ),
+            "executable_unavailable_because": (
+                "There is no artifact in this synthetic document for a renderer to "
+                "rasterise, so no executed case can be constructed."
+            ),
             "positive_case": {"description": "page renders", "result": "PASS"},
             "negative_case": {"description": "blank page rejected", "result": "DETECTED"},
         },
@@ -464,6 +474,174 @@ def test_executable_oracles() -> None:
     )
 
 
+DECLARED_REASON = (
+    "The project declares the qualifying cases because executing them requires "
+    "tooling that is not guaranteed to be present in the validation environment."
+)
+DECLARED_INFEASIBLE = (
+    "Executing this oracle would require an external tool that cannot be assumed "
+    "available, so a known-good and known-bad pair cannot be constructed here."
+)
+
+
+def _declared_qualification(**overrides) -> dict:
+    qual = {
+        "mode": "declared",
+        "rationale": DECLARED_REASON,
+        "executable_unavailable_because": DECLARED_INFEASIBLE,
+        "positive_case": {"description": "known good accepted", "result": "PASS"},
+        "negative_case": {"description": "known bad rejected", "result": "DETECTED"},
+    }
+    qual.update(overrides)
+    return qual
+
+
+def _with_all_oracles(qualification: dict) -> dict:
+    """Apply one qualification block to every oracle a critical claim uses.
+
+    Needed for the claim-level assurance, which is DECLARED only when *every*
+    oracle carrying the claim is declared.
+    """
+    doc = _good_document()
+    for name in list(doc["oracles"]):
+        doc["oracles"][name]["qualification"] = copy.deepcopy(qualification)
+    return doc
+
+
+def test_qualification_assurance() -> None:
+    print("\nC2. qualification assurance: EXECUTED versus DECLARED")
+
+    # Every oracle declared and properly documented: the claim may pass, but the
+    # assurance must stay visibly weaker than an executed qualification.
+    with tempfile.TemporaryDirectory() as work:
+        code, stdout, stderr, payload = invoke(
+            work, document=_with_all_oracles(_declared_qualification())
+        )
+    seen = rules_in(payload)
+    claim_payload = (payload.get("claims") or [{}])[0]
+    report(
+        code == 0
+        and gate_of(payload) == "PASS"
+        and claim_payload.get("oracle_assurance") == "DECLARED"
+        and "ORACLE_ASSURANCE_DEGRADED" in seen,
+        "a documented DECLARED claim passes but its assurance is recorded as DECLARED",
+        f"exit={code} gate={gate_of(payload)} "
+        f"assurance={claim_payload.get('oracle_assurance')} rules={sorted(seen)}",
+    )
+
+    # The distinction must be machine-readable, not just prose in a message.
+    with tempfile.TemporaryDirectory() as work:
+        path = os.path.join(work, "verification.yaml")
+        with open(path, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(
+                _with_all_oracles(_declared_qualification()), handle, sort_keys=False
+            )
+        proc = subprocess.run(
+            [sys.executable, CDV, "summary", "--project", work],
+            capture_output=True, text=True, cwd=work, timeout=120,
+        )
+    report(
+        "CDV_ORACLE_QUALIFICATION_MODE=DECLARED" in proc.stdout,
+        "the qualification mode is machine-readable in the summary",
+        f"stdout={proc.stdout[:400]}",
+    )
+
+    # No statement of why executing is impossible. This is the load-bearing case
+    # for the preferred policy: a critical claim may not lean on a declared
+    # oracle unless executing it is genuinely unavailable, and that must be said.
+    with tempfile.TemporaryDirectory() as work:
+        qual = _declared_qualification()
+        del qual["executable_unavailable_because"]
+        code, stdout, stderr, payload = invoke(work, document=_with_all_oracles(qual))
+    seen = rules_in(payload)
+    report(
+        code != 0 and "ORACLE_DECLARED_MISSING_FEASIBILITY" in seen,
+        "DECLARED without stating why executing is unavailable is rejected",
+        f"exit={code} rules={sorted(seen)}",
+    )
+
+    with tempfile.TemporaryDirectory() as work:
+        qual = _declared_qualification()
+        del qual["rationale"]
+        code, stdout, stderr, payload = invoke(work, document=_with_all_oracles(qual))
+    seen = rules_in(payload)
+    report(
+        code != 0 and "ORACLE_DECLARED_MISSING_RATIONALE" in seen,
+        "DECLARED without a rationale is rejected",
+        f"exit={code} rules={sorted(seen)}",
+    )
+
+    # Admitting execution was possible while declaring anyway is refusing
+    # stronger evidence the project could have produced.
+    with tempfile.TemporaryDirectory() as work:
+        doc = _with_all_oracles(_declared_qualification(executable_feasible=True))
+        code, stdout, stderr, payload = invoke(work, document=doc)
+    seen = rules_in(payload)
+    report(
+        code != 0 and "ORACLE_EXECUTABLE_FEASIBLE_BUT_DECLARED" in seen,
+        "DECLARED while execution was feasible is rejected",
+        f"exit={code} rules={sorted(seen)}",
+    )
+
+    # Masquerade: claiming EXECUTED with nothing to execute. Without this rule a
+    # document could obtain the stronger assurance by relabelling.
+    with tempfile.TemporaryDirectory() as work:
+        qual = _declared_qualification(mode="EXECUTED")
+        code, stdout, stderr, payload = invoke(
+            work, document=_with_all_oracles(qual), allow_execute=True
+        )
+    seen = rules_in(payload)
+    report(
+        code != 0 and "ORACLE_EXECUTED_WITHOUT_COMMANDS" in seen,
+        "EXECUTED declared with no commands is rejected as a masquerade",
+        f"exit={code} rules={sorted(seen)}",
+    )
+
+    # The v1.0.0 spelling keeps working, so existing documents do not break.
+    with tempfile.TemporaryDirectory() as work:
+        doc = _with_all_oracles(
+            {
+                "mode": "executable",
+                "positive_command": GOOD_ORACLE_CMD,
+                "negative_command": GOOD_NEGATIVE_CMD,
+            }
+        )
+        code, stdout, stderr, payload = invoke(work, document=doc, allow_execute=True)
+    claim_payload = (payload.get("claims") or [{}])[0]
+    report(
+        code == 0
+        and gate_of(payload) == "PASS"
+        and claim_payload.get("oracle_assurance") == "EXECUTED",
+        "the v1.0.0 spelling 'executable' is still accepted and means EXECUTED",
+        f"exit={code} gate={gate_of(payload)} "
+        f"assurance={claim_payload.get('oracle_assurance')}",
+    )
+
+    with tempfile.TemporaryDirectory() as work:
+        code, stdout, stderr, payload = invoke(
+            work, document=_with_all_oracles(_declared_qualification(mode="vibes"))
+        )
+    seen = rules_in(payload)
+    report(
+        code != 0 and "ORACLE_QUALIFICATION_MODE_INVALID" in seen,
+        "an unrecognised qualification mode is rejected rather than guessed at",
+        f"exit={code} rules={sorted(seen)}",
+    )
+
+    # Residual uncertainty is still required: the auto-recorded qualification gap
+    # must not satisfy the requirement on the project's behalf.
+    with tempfile.TemporaryDirectory() as work:
+        doc = _with_all_oracles(_declared_qualification())
+        del doc["claims"][0]["residual_uncertainty"]
+        code, stdout, stderr, payload = invoke(work, document=doc)
+    seen = rules_in(payload)
+    report(
+        code != 0 and "RESIDUAL_UNCERTAINTY_MISSING" in seen,
+        "DECLARED does not excuse the claim from recording its own residual uncertainty",
+        f"exit={code} rules={sorted(seen)}",
+    )
+
+
 def test_examples() -> None:
     """Every shipped example must pass the gate it documents.
 
@@ -516,9 +694,27 @@ def main() -> int:
     test_input_handling()
     test_positive_paths()
     test_executable_oracles()
+    test_qualification_assurance()
     test_examples()
 
     print("-" * 78)
+
+    def verdict(token: str) -> str:
+        matching = [(label, label not in failures) for label in case_labels if token in label]
+        if not matching:
+            return "NOT_RUN"
+        return "PASS" if all(ok for _, ok in matching) else "FAIL"
+
+    print(
+        "ORACLE_EXECUTED_MODE="
+        + ("CERTIFIED" if verdict("certified by executing") == "PASS" else "NOT_CERTIFIED")
+    )
+    print(f"ORACLE_ALWAYS_PASS_CANARY={'REJECTED' if verdict('never rejects a known-bad') == 'PASS' else 'NOT_REJECTED'}")
+    print(f"ORACLE_CRASHING_CANARY={'REJECTED' if verdict('crashes rather than reporting') == 'PASS' else 'NOT_REJECTED'}")
+    print(f"ORACLE_DECLARED_MODE={'VISIBLY_WEAKER' if verdict('assurance is recorded as DECLARED') == 'PASS' else 'NOT_VISIBLE'}")
+    print(f"ORACLE_DECLARED_INCOMPLETE_CANARY={'REJECTED' if verdict('why executing is unavailable is rejected') == 'PASS' else 'NOT_REJECTED'}")
+    print(f"ORACLE_MASQUERADE_CANARY={'REJECTED' if verdict('masquerade') == 'PASS' else 'NOT_REJECTED'}")
+
     if failures:
         print(f"{RED}EDGE_CASES=FAIL{RESET} ({len(failures)} case(s) failed)")
         for label in failures:

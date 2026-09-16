@@ -122,6 +122,7 @@ R[CANARY_STATUS]=PENDING
 R[STATIC_STATUS]=PENDING
 R[E2E_STATUS]=NOT_RUN
 R[READBACK_STATUS]=NOT_RUN
+R[CONTEXT_STATUS]=PENDING
 R[OPENCODE_RUNTIME]=NOT_DETECTED
 R[OPENCODE_VERSION]=unknown
 R[FILES_INSTALLED]=0
@@ -167,6 +168,7 @@ for required in core/cdv/cli.py bin/cdv templates/verification.yaml \
                 runtime/opencode/verification-guard.ts \
                 tests/lib/canaries.py tests/lib/canary_runner.py \
                 tests/lib/static_checks.py tests/lib/edge_cases.py \
+                tests/lib/context_canaries.py \
                 tests/e2e/enforcement_canary.py \
                 tests/independent_readback.py; do
   if [ ! -e "${SRC_ROOT}/${required}" ]; then
@@ -339,6 +341,7 @@ cp "${SRC_ROOT}/tests/lib/canaries.py" "${ENGINE_DIR}/tests/lib/"
 cp "${SRC_ROOT}/tests/lib/canary_runner.py" "${ENGINE_DIR}/tests/lib/"
 cp "${SRC_ROOT}/tests/lib/static_checks.py" "${ENGINE_DIR}/tests/lib/"
 cp "${SRC_ROOT}/tests/lib/edge_cases.py" "${ENGINE_DIR}/tests/lib/"
+cp "${SRC_ROOT}/tests/lib/context_canaries.py" "${ENGINE_DIR}/tests/lib/"
 cp "${SRC_ROOT}/tests/e2e/enforcement_canary.py" "${ENGINE_DIR}/tests/e2e/"
 cp "${SRC_ROOT}/tests/independent_readback.py" "${ENGINE_DIR}/tests/"
 ok "canary suite, edge cases and readback tool installed under .verification/tests/"
@@ -552,6 +555,23 @@ fi
 # ---------------------------------------------------------------------------
 # 11. END-TO-END GUARD ENFORCEMENT CANARY
 # ---------------------------------------------------------------------------
+section "10b/12  VERIFICATION CONTEXT INTEGRITY"
+# Run against the *installed* engine, so this checks the copy the project will
+# actually use rather than the source tree it came from.
+CONTEXT_LOG="$(mktemp "${TMPDIR:-/tmp}/cdv-ctx-XXXXXX")"
+if "$PYTHON_BIN" "${ENGINE_DIR}/tests/lib/context_canaries.py" > "$CONTEXT_LOG" 2>&1; then
+  ok "context integrity canaries passed (installed engine)"
+  R[CONTEXT_STATUS]=PASS
+else
+  err "context integrity canaries failed"
+  sed 's/^/       /' "$CONTEXT_LOG" | tail -25 >&2
+  R[CONTEXT_STATUS]=FAIL
+fi
+grep -E '^(CONTEXT_|WRONG_|STALE_|GUARD_INACTIVE_)' "$CONTEXT_LOG" | sed 's/^/       /' || true
+[ "$VERBOSE" -eq 1 ] && sed 's/^/       /' "$CONTEXT_LOG"
+rm -f "$CONTEXT_LOG"
+
+# ---------------------------------------------------------------------------
 section "11/12  GUARD ENFORCEMENT CANARY (end to end)"
 if [ "$RUN_E2E" -eq 0 ]; then
   warn "--no-e2e given: guard behaviour will NOT be demonstrated; result will be FAIL"
@@ -655,6 +675,7 @@ if [ "${R[ENGINE_STATUS]}" = "INSTALLED" ] \
    && [ "${R[GUARD_STATUS]}" = "INSTALLED" ] \
    && [ "${R[STATIC_STATUS]}" = "PASS" ] \
    && [ "${R[CANARY_STATUS]}" = "PASS" ] \
+   && [ "${R[CONTEXT_STATUS]}" = "PASS" ] \
    && [ "${R[E2E_STATUS]}" = "PASS" ] \
    && [ "${R[READBACK_STATUS]}" = "PASS" ]; then
   BOOTSTRAP_RESULT=PASS
@@ -696,6 +717,7 @@ FRESHNESS_GATE=${FRESHNESS_GATE:-NOT_OBSERVED}
 RESIDUAL_UNCERTAINTY_GATE=${RESIDUAL_GATE:-NOT_OBSERVED}
 REAL_TARGET_BOOTSTRAP=${R[REAL_TARGET_BOOTSTRAP]:-NOT_RUN}
 INDEPENDENT_READBACK=${R[READBACK_STATUS]}
+CONTEXT_INTEGRITY_GATE=${R[CONTEXT_STATUS]}
 GUARD_ENFORCEMENT_E2E=${R[E2E_STATUS]}
 STATIC_CHECKS=${R[STATIC_STATUS]}
 EXISTING_VERSION=${R[EXISTING_VERSION]}

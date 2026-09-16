@@ -77,10 +77,17 @@ installer refuses and tells you to pass `--force`.
 
 **Fail-closed.** `VERIFICATION_BOOTSTRAP=PASS` requires that the installed engine
 rejects known-bad input under its own canary suite, that all five gate
-dimensions were driven to failure by the canary meant to exercise them, that a
-real runtime blocked an invalid completion while permitting a valid one, and that
-the installation independently read back as matching its manifest. Copying files
-is not on that list.
+dimensions were driven to failure by the canary meant to exercise them, that the
+context integrity canaries pass against the *installed* engine, that a real
+runtime blocked an invalid completion while permitting a valid one, and that the
+installation independently read back as matching its manifest. Copying files is
+not on that list.
+
+**Non-destructive to your verification state.** `verification.yaml` is never
+overwritten and is never made write-protected. Recording claims, failure modes,
+evidence and residual uncertainty is the workflow; the engine validates changes
+rather than forbidding them. The separate property — that editing the state
+cannot buy a PASS — is tested explicitly by the end-to-end canary.
 
 ### Exit codes
 
@@ -96,6 +103,7 @@ is not on that list.
 ```bash
 <target>/.verification/tests/lib/canary_runner.py       # canaries
 <target>/.verification/tests/lib/static_checks.py       # source consistency
+<target>/.verification/tests/lib/context_canaries.py    # context integrity
 <target>/.verification/tests/e2e/enforcement_canary.py \
     --project <target> --model PROVIDER/MODEL           # guard enforcement
 python3 <target>/.verification/tests/independent_readback.py \
@@ -144,6 +152,13 @@ report says so.
 installed files after installation. Run the readback to see which; re-run the
 installer to restore them, or investigate, because files under `.verification/`
 are not meant to change at runtime.
+
+**`CONTEXT_PROOF=FAIL`** — the verifier could not establish that it was observing
+the intended target, so it refused to interpret its results. The output names the
+contradicting indicator. `pwd_env` means `PWD` disagrees with the real working
+directory: run the check from inside the target, or set `PWD` to match. This is
+the v1.0.0 false PASS being caught, not a spurious failure — see
+`spec/regression-v1.0.0-false-pass.md`.
 
 **The guard does not block anything** — confirm the file is at
 `.opencode/plugin/verification-guard.ts` and *not* nested in a subdirectory.

@@ -54,6 +54,13 @@ oracles:
     description: observe the exit status and stdout of a separate process
     qualification:
       mode: declared
+      rationale: >
+        This example is documentation. Declaring keeps it self-contained, so it
+        validates on any machine without invoking a real entry point.
+      executable_unavailable_because: >
+        The example has no real command-line entry point to execute, so there is nothing
+        for the engine to run. A real project has one and should convert this to
+        EXECUTED once it exists.
       positive_case:
         description: a command that exits 0 was reported as succeeding
         result: PASS
@@ -66,6 +73,12 @@ oracles:
     description: read the produced output back from the filesystem
     qualification:
       mode: declared
+      rationale: >
+        This example is documentation and is validated by the bootstrap test suite on
+        machines without a fixture filesystem to read back.
+      executable_unavailable_because: >
+        There is no real output artifact to inspect in an example, so an executed case
+        cannot be constructed. A real project has one and should execute it.
       positive_case:
         description: a file known to exist was found
         result: PASS

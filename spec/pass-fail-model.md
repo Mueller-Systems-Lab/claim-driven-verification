@@ -25,6 +25,10 @@ For a **critical** claim:
 | 3 | every oracle used exists and is defined | `ORACLE_UNDEFINED` |
 | 4 | every oracle used is qualified (known-good and known-bad) | `ORACLE_NOT_QUALIFIED` |
 | 5 | qualification actually demonstrated detection | `ORACLE_QUALIFICATION_BLOCKED` |
+| 5a | the declared qualification mode is recognised | `ORACLE_QUALIFICATION_MODE_INVALID` |
+| 5b | a `DECLARED` qualification states a rationale | `ORACLE_DECLARED_MISSING_RATIONALE` |
+| 5c | a `DECLARED` qualification states why execution is impossible | `ORACLE_DECLARED_MISSING_FEASIBILITY` |
+| 5d | an `EXECUTED` claim supplies commands to execute | `ORACLE_EXECUTED_WITHOUT_COMMANDS` |
 | 6 | every failure mode is covered by passing, current evidence | `FAILURE_MODE_UNCOVERED` |
 | 7 | passing evidence is bound to a failure mode | `EVIDENCE_NO_FAILURE_MODE` |
 | 8 | at least two materially independent evidence paths | `INSUFFICIENT_INDEPENDENT_PATHS` |
@@ -43,10 +47,26 @@ For a **non-critical** claim, requirements 1–5 are skipped and requirement 8 i
 relaxed to "at least one passing, current evidence path". Requirements 6, 7, 9–12,
 17 and 18 still apply. Requirement 16 does not apply.
 
+Requirements 5a–5d are what stop the two qualification modes being
+interchangeable in practice: a `DECLARED` case cannot be presented as `EXECUTED`,
+an `EXECUTED` case with nothing to execute is refused, and a `DECLARED` case must
+justify itself. `ORACLE_EXECUTABLE_FEASIBLE_BUT_DECLARED` is an additional
+document-level refusal: a project that admits execution was feasible and declared
+anyway does not pass.
+
 Note requirement 18: a claim that matches a criticality trigger *is* critical for
 the purposes of this table, whatever its label (see `claim-model.md`). So the
 column you read is decided by the claim's content, not by its author's
 classification.
+
+### What is not in this table
+
+Verification context integrity is deliberately absent. It is a precondition on
+the *observer*, not a property of the document, so it cannot be evaluated from
+`verification.yaml` — the engine would be checking its own vantage point. It is
+enforced separately by `cdv context-proof` and gates the interpretation of any
+behavioural result. See `failure-mode-model.md` and
+`regression-v1.0.0-false-pass.md`.
 
 ## Document-level errors
 

@@ -115,6 +115,44 @@ def cmd_gate(args: argparse.Namespace) -> int:
     return result.exit_code
 
 
+def cmd_context_proof(args: argparse.Namespace) -> int:
+    """Establish that this process is observing the intended target.
+
+    Machine-enforced verification context integrity. A behavioural check must not
+    be interpreted until this reports PASS: absence of an effect is only evidence
+    of blocking if the observation was of the right place. See
+    ``core/cdv/context.py`` for the false PASS that this exists to prevent.
+    """
+    from . import context as context_mod
+
+    project = os.path.abspath(args.project or os.getcwd())
+    proof = context_mod.prove(
+        project,
+        expect_realpath=args.expect_realpath,
+        expect_commit=args.expect_commit,
+        marker_nonce=args.require_marker,
+        observed_project=args.observed_project,
+        require_guard_hooks=args.require_guard_hooks,
+        require_pwd=args.require_pwd,
+        allow_inherited_only=args.allow_inherited_only,
+    )
+
+    if args.json:
+        print(json.dumps(proof.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(f"CDV_CONTEXT_PROOF={proof.status}")
+        print(f"CDV_CONTEXT_TARGET={proof.target}")
+        print(f"CDV_CONTEXT_EXPECTED={proof.expected_realpath}")
+        print(f"CDV_CONTEXT_AGREEING={len(proof.agreeing)}")
+        print(f"CDV_CONTEXT_INDEPENDENT_AGREEING={len(proof.independent_agreeing)}")
+        for reason in proof.reasons:
+            print(f"CDV_CONTEXT_REASON={reason}")
+        if args.verbose:
+            print(proof.render())
+
+    return EXIT_PASS if proof.status == context_mod.PASS else EXIT_FAIL
+
+
 def cmd_rules(args: argparse.Namespace) -> int:
     """List every rule id the engine can emit.
 
@@ -351,6 +389,53 @@ def build_parser() -> argparse.ArgumentParser:
     p_rules = sub.add_parser("rules", help="list emittable rule ids")
     p_rules.add_argument("--json", action="store_true")
     p_rules.set_defaults(func=cmd_rules)
+
+    p_ctx = sub.add_parser(
+        "context-proof",
+        help=(
+            "prove this process is observing the intended target before any "
+            "behavioural result is interpreted"
+        ),
+    )
+    p_ctx.add_argument("--project", help="the intended target project (absolute)")
+    p_ctx.add_argument(
+        "--expect-realpath",
+        help="the identity the caller believes the target resolves to",
+    )
+    p_ctx.add_argument("--expect-commit", help="the commit under evaluation")
+    p_ctx.add_argument(
+        "--require-marker",
+        help=(
+            "a per-run nonce expected in <project>/.verification/context-marker. "
+            "Written by the caller, so a match cannot have been produced by the "
+            "agent under test."
+        ),
+    )
+    p_ctx.add_argument(
+        "--observed-project",
+        help="the project the runtime itself reported using",
+    )
+    p_ctx.add_argument(
+        "--require-guard-hooks",
+        action="store_true",
+        help="require that the guard's hooks wrote to the target's audit log",
+    )
+    p_ctx.add_argument(
+        "--require-pwd",
+        action="store_true",
+        help="treat an unset PWD as a contradiction rather than as absent",
+    )
+    p_ctx.add_argument(
+        "--allow-inherited-only",
+        action="store_true",
+        help=(
+            "accept a proof built only from cwd and PWD. Weaker: both can be "
+            "inherited stale, which is the exact defect this check exists to catch."
+        ),
+    )
+    p_ctx.add_argument("--json", action="store_true")
+    p_ctx.add_argument("--verbose", "-v", action="store_true")
+    p_ctx.set_defaults(func=cmd_context_proof)
 
     p_version = sub.add_parser("version", help="engine and schema version")
     p_version.add_argument("--json", action="store_true")

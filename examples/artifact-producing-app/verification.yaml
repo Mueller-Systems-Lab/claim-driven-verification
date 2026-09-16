@@ -46,6 +46,13 @@ oracles:
     # oracle that fails to detect corruption.
     qualification:
       mode: declared
+      rationale: >
+        This example ships without a build directory, so the readback case is declared.
+        A real project should switch it to EXECUTED: the executed form is shown in the
+        comment above.
+      executable_unavailable_because: >
+        The example contains no produced artifact for a readback to find or fail to
+        find, so no known-good and known-bad pair can be constructed here.
       positive_case:
         description: a file known to exist was found and was non-empty
         result: PASS
@@ -60,6 +67,12 @@ oracles:
       own, so the application's own notion of "valid" is not what decides.
     qualification:
       mode: declared
+      rationale: >
+        The example ships without a build directory, so the cases are declared; the
+        comment above the block shows the executed form a real project should use.
+      executable_unavailable_because: >
+        A real project has the artifact and should execute this oracle. The example
+        cannot, because it contains no produced PDF for the parser to accept or reject.
       positive_case:
         description: a known-good PDF was accepted by the parser
         result: PASS
@@ -76,6 +89,12 @@ oracles:
       which is how a structurally valid file with wrong content is caught.
     qualification:
       mode: declared
+      rationale: >
+        Rasterising requires a rendering stack that is not guaranteed to be present
+        where the example is validated.
+      executable_unavailable_because: >
+        The example contains no artifact to rasterise, so there is no known-good or
+        known-bad page for the renderer to judge.
       positive_case:
         description: a page with known content was read back correctly
         result: PASS

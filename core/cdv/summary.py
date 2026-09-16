@@ -31,6 +31,11 @@ GATE_DIMENSIONS: dict[str, tuple[str, ...]] = {
         "ORACLE_NOT_QUALIFIED",
         "ORACLE_QUALIFICATION_BLOCKED",
         "ORACLE_QUALIFICATION_UNVERIFIED",
+        "ORACLE_QUALIFICATION_MODE_INVALID",
+        "ORACLE_DECLARED_MISSING_RATIONALE",
+        "ORACLE_DECLARED_MISSING_FEASIBILITY",
+        "ORACLE_EXECUTABLE_FEASIBLE_BUT_DECLARED",
+        "ORACLE_EXECUTED_WITHOUT_COMMANDS",
         "ORACLE_KIND_INVALID",
         "ORACLE_UNDEFINED",
     ),
@@ -71,6 +76,29 @@ def dimensions(result: ValidationResult) -> dict[str, str]:
     return {name: dimension_status(result, name) for name in GATE_DIMENSIONS}
 
 
+def oracle_qualification_mode(result: ValidationResult) -> str:
+    """The strongest assurance available for how the oracles were qualified.
+
+    EXECUTED only when every oracle carrying a claim was executed by the engine.
+    DECLARED when every one was merely asserted. MIXED when both occur. Reported
+    separately from the gate verdict on purpose: a document can pass while its
+    oracle assurance is only DECLARED, and that difference must stay visible
+    rather than being absorbed into a single PASS.
+    """
+    modes = {
+        claim.oracle_assurance
+        for claim in result.claims
+        if claim.oracle_assurance not in ("NONE",)
+    }
+    if not modes:
+        return "NOT_OBSERVED"
+    if modes == {"EXECUTED"}:
+        return "EXECUTED"
+    if modes == {"DECLARED"}:
+        return "DECLARED"
+    return "MIXED"
+
+
 def render_keyvalues(result: ValidationResult) -> str:
     """Stable key=value rendering."""
     dims = dimensions(result)
@@ -96,6 +124,7 @@ def render_keyvalues(result: ValidationResult) -> str:
         f"CDV_ERRORS={counts.get('errors', 0)}",
         f"CDV_WARNINGS={counts.get('warnings', 0)}",
         f"CDV_RESIDUAL_UNCERTAINTY={len(_all_uncertainty(result))}",
+        f"CDV_ORACLE_QUALIFICATION_MODE={oracle_qualification_mode(result)}",
     ]
     if result.findings and result.findings[0].rule == "GATE_FAIL":
         lines.append(f"CDV_FIRST_BLOCKING_RULE={_first_blocking_rule(result) or 'NONE'}")
@@ -144,7 +173,8 @@ def render_text(result: ValidationResult, *, verbose: bool = False) -> str:
         ind = claim.independence
         lines.append(
             f"        evidence={claim.evidence_count} passing={len(claim.passing_evidence)} "
-            f"independence={ind.get('grade')} material_pairs={ind.get('material_pair_count')}"
+            f"independence={ind.get('grade')} material_pairs={ind.get('material_pair_count')} "
+            f"oracle_assurance={claim.oracle_assurance}"
         )
         covered = sum(1 for fm, evs in claim.coverage.items() if evs)
         total = len(claim.coverage)
@@ -186,6 +216,7 @@ def render_json(result: ValidationResult) -> str:
     payload["engine_version"] = __version__
     payload["schema_version"] = SCHEMA_VERSION
     payload["dimensions"] = dimensions(result)
+    payload["oracle_qualification_mode"] = oracle_qualification_mode(result)
     return json.dumps(payload, indent=2, sort_keys=False)
 
 

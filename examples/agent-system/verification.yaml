@@ -33,6 +33,12 @@ oracles:
       not participate in producing it.
     qualification:
       mode: declared
+      rationale: >
+        The example documents the structure of an agent system; there is no real
+        workspace to read back when the example itself is validated.
+      executable_unavailable_because: >
+        No agent run produces a deliverable in the example, so there is no known-good or
+        known-bad workspace state to inspect.
       positive_case:
         description: a deliverable written by hand was found and read
         result: PASS
@@ -48,6 +54,12 @@ oracles:
       distinguishes "a file was written" from "a user can use it".
     qualification:
       mode: declared
+      rationale: >
+        Opening the deliverable externally requires a document viewer, which the example
+        cannot assume is installed.
+      executable_unavailable_because: >
+        The example has no deliverable for an external tool to open, so an executed case
+        cannot be constructed.
       positive_case:
         description: a known-good document was opened and its content read
         result: PASS

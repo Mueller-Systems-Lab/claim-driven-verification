@@ -37,6 +37,8 @@ BASELINE: dict = {
             "description": "read the produced artifact back from the filesystem",
             "qualification": {
                 "mode": "declared",
+                "rationale": 'The canary fixture must stay hermetic and must not depend on tools that may be absent on the machine running the suite.',
+                "executable_unavailable_because": "Executing the oracle would require external tools (a shell, a PDF parser) to be present and would make the canary's result depend on the test machine rather than on the engine under test.",
                 "positive_case": {"description": "real file present", "result": "PASS"},
                 "negative_case": {"description": "no file present", "result": "DETECTED"},
             },
@@ -46,6 +48,8 @@ BASELINE: dict = {
             "description": "parse the artifact with a parser the producer does not own",
             "qualification": {
                 "mode": "declared",
+                "rationale": 'The canary fixture must stay hermetic and must not depend on tools that may be absent on the machine running the suite.',
+                "executable_unavailable_because": "Executing the oracle would require external tools (a shell, a PDF parser) to be present and would make the canary's result depend on the test machine rather than on the engine under test.",
                 "positive_case": {"description": "valid pdf", "result": "PASS"},
                 "negative_case": {"description": "truncated pdf rejected", "result": "DETECTED"},
             },

@@ -85,6 +85,62 @@ def main() -> int:
         f"unresolved: {unresolved}",
     )
 
+    # --- 1b: every referenced name is actually BOUND in the module using it --
+    # Added after a real defect: a rule id existed in errors.py and was
+    # referenced in gates.py, but was never imported into gates.py. The earlier
+    # check above passed, because the name does resolve in errors.py -- just not
+    # in the module that used it. It surfaced as an ENGINE_INTERNAL_ERROR on the
+    # one code path that reached it, which is the class of bug this file exists
+    # to catch, so the check is now AST-based: a name that looks like a rule but
+    # is not bound in its own module is an error regardless of which branch uses it.
+    unbound: dict[str, list[str]] = {}
+    for filename in sorted(os.listdir(CORE)):
+        if not filename.endswith(".py"):
+            continue
+        path = os.path.join(CORE, filename)
+        tree = ast.parse(open(path, "r", encoding="utf-8").read(), filename=path)
+        bound: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    bound.add(alias.asname or alias.name.split(".")[0])
+            elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    for sub in ast.walk(target):
+                        if isinstance(sub, ast.Name):
+                            bound.add(sub.id)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                bound.add(node.name)
+            elif isinstance(node, ast.arg):
+                bound.add(node.arg)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                bound.add(node.name)
+            elif isinstance(node, ast.comprehension):
+                for sub in ast.walk(node.target):
+                    if isinstance(sub, ast.Name):
+                        bound.add(sub.id)
+            elif isinstance(node, ast.Global):
+                bound.update(node.names)
+
+        missing = sorted(
+            {
+                node.id
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Name)
+                and node.id.startswith("RULE_")
+                and node.id in defined_names
+                and node.id not in bound
+            }
+        )
+        if missing:
+            unbound[filename] = missing
+    report(
+        not unbound,
+        "every RULE_* name used in a module is imported or defined there",
+        f"referenced but not bound: {unbound}",
+    )
+
     # summary.py maps named gate dimensions to the rule ids that drive them.
     # Checked structurally rather than by scanning string literals: a literal
     # scan cannot tell a rule id from a dimension name and flagged
@@ -117,6 +173,53 @@ def main() -> int:
         "the five contracted gate dimensions are all declared",
         f"declared={sorted(declared_dimensions)}",
     )
+
+    # --- 2b: the guard's default completion-command policy ------------------
+    # Deterministic verification of a configuration fact, so that it does not
+    # depend on a model agreeing to attempt a real commit. A well-behaved model
+    # reads the injected gate state and declines to commit while the gate is not
+    # PASS -- which is the system working as intended, and which means the
+    # empirical provocation of a real commit cannot be relied on per model. The
+    # mechanism (a matched completion action is blocked, with no side effect) is
+    # proven per provider by provoking a configured pattern; the policy (which
+    # commands count as completion actions) is verified here by reading it.
+    guard_path = os.path.join(REPO, "runtime", "opencode", "verification-guard.ts")
+    if os.path.isfile(guard_path):
+        guard_src = open(guard_path, "r", encoding="utf-8").read()
+        start = guard_src.find("const DEFAULT_COMPLETION_PATTERNS")
+        end = guard_src.find("\n]", start) if start != -1 else -1
+        block = guard_src[start:end] if start != -1 and end != -1 else ""
+        required_patterns = {
+            "git commit": r"git\s+commit",
+            "git push": r"git\s+push",
+            "git tag": r"git\s+tag",
+            "git merge": r"git\s+merge",
+            "gh pr": r"gh\s+pr",
+            "gh release": r"gh\s+release",
+            "npm publish": r"npm\s+publish",
+            "cargo publish": r"cargo\s+publish",
+            "twine upload": r"twine\s+upload",
+            "docker push": r"docker\s+push",
+            "kubectl apply": r"kubectl\s+apply",
+            "terraform apply": r"terraform\s+apply",
+            "helm": r"helm",
+            "fly deploy": r"fly\s+deploy",
+        }
+        missing = sorted(
+            label for label, token in required_patterns.items() if token not in block
+        )
+        report(
+            bool(block),
+            "the guard's default completion-command list was found",
+            f"looked for DEFAULT_COMPLETION_PATTERNS in {guard_path}",
+        )
+        report(
+            not missing,
+            f"the guard treats all {len(required_patterns)} expected commands as completion actions",
+            f"missing: {missing}",
+        )
+    else:
+        report(False, "the guard source is present", guard_path)
 
     # --- 3: canary expectations exist ---------------------------------------
     sys.path.insert(0, os.path.join(HERE))
