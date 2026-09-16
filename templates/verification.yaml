@@ -1,0 +1,128 @@
+# Claim-Driven Verification state for this project.
+#
+# This file is the canonical, project-specific source of truth for:
+#   * what this project claims about itself
+#   * how each claim could fail
+#   * what decides pass or fail for each failure mode
+#   * the evidence collected so far, and how independent it is
+#   * what remains uncertain
+#
+# It is NOT a copy of the methodology. The methodology lives in the bootstrap
+# repository. Keep this file project-specific and small.
+#
+# Validate with:   .verification/bin/cdv validate
+# Refresh state:   .verification/bin/cdv fingerprint
+#
+# The document below is a working minimal example: a single non-critical claim
+# that is genuinely satisfied by the fact that the verification guard itself was
+# installed and can read this file. Replace it with your project's real claims.
+
+version: 1
+
+project:
+  name: __PROJECT_NAME__
+  owner: __OWNER__
+
+# The state under evaluation. `cdv init` stamps this with the real commit and
+# tree hash at install time, and `cdv fingerprint` refreshes it. Recording it by
+# hand is how stale evidence comes to look current, so prefer the command.
+state:
+  commit: "__COMMIT__"
+  tree_hash: "__TREE_HASH__"
+
+integration:
+  verification_guard:
+    adapter: opencode
+    version: __BOOTSTRAP_VERSION__
+    installed_at: "__INSTALLED_AT__"
+
+# Oracles: the things that actually decide pass or fail. Every oracle referenced
+# by a failure mode or an evidence path must be defined here. Oracles that carry
+# critical claims must be qualified with a known-good AND a known-bad case; the
+# known-bad case is the load-bearing one, because an oracle that has never been
+# shown to reject a wrong answer is not evidence.
+oracles:
+  cdv-selfcheck:
+    kind: independent-technical
+    description: >
+      The verification engine itself reports the gate verdict for this document
+      from a separate process, and the guard relays that verdict verbatim.
+    qualification:
+      mode: declared
+      positive_case:
+        description: engine reports CDV_GATE=PASS for a document whose claims are met
+        result: PASS
+      negative_case:
+        description: >
+          engine reports CDV_GATE=FAIL for a document with a critical claim that
+          has no evidence; the rejection is asserted by the bootstrap canary suite
+        result: DETECTED
+
+claims:
+  - id: VERIFICATION-GUARD-ACTIVE-001
+    statement: >
+      The Claim-Driven Verification guard is installed in this project, is
+      discoverable by the runtime, and reports the gate verdict for this
+      document by reading it from disk.
+    type: STATE
+    criticality: NON_CRITICAL
+    criticality_rationale: >
+      This claim asserts only that local developer tooling is present and
+      readable. It does not touch money, data, privacy, security,
+      authentication, persistent state, external side effects, generated
+      artifacts, release readiness or safety, so a false PASS here cannot cause
+      harm outside the development environment.
+
+    failure_modes:
+      - id: GUARD_NOT_INSTALLED
+        oracle: cdv-selfcheck
+        description: the guard or the installed engine is absent or not executable
+      - id: DOCUMENT_UNREADABLE
+        oracle: cdv-selfcheck
+        description: verification.yaml is missing, malformed, or at an unsupported version
+
+    evidence:
+      - id: EV-INSTALLED-001
+        oracle: cdv-selfcheck
+        result: PASS
+        description: >
+          `.verification/bin/cdv version` exits 0 in a separate process and
+          prints the engine and schema versions.
+        dimensions:
+          model: none
+          tool: cdv-cli
+          implementation: python-engine
+          runtime: cpython
+          data_source: installed-files
+          observation_channel: process-exit-code
+          specification_source: bootstrap-version-file
+        observed_state:
+          commit: "__COMMIT__"
+          tree_hash: "__TREE_HASH__"
+        failure_modes: [GUARD_NOT_INSTALLED]
+        evidence_type: build
+
+      - id: EV-INSTALLED-002
+        oracle: cdv-selfcheck
+        result: PASS
+        description: >
+          The guard's own installation manifest is read back from disk by a
+          shell one-liner that never invokes the engine, and its recorded
+          version matches the installed core's reported version.
+        dimensions:
+          model: none
+          tool: shell-coreutils
+          implementation: filesystem-readback
+          runtime: posix-shell
+          data_source: manifest-json
+          observation_channel: filesystem
+          specification_source: independent-readback-script
+        observed_state:
+          commit: "__COMMIT__"
+          tree_hash: "__TREE_HASH__"
+        failure_modes: [GUARD_NOT_INSTALLED, DOCUMENT_UNREADABLE]
+        evidence_type: integration
+
+    residual_uncertainty:
+      - Only the OpenCode adapter is exercised by this project's bootstrap; other
+        runtime adapters are covered by the bootstrap repository's own tests.

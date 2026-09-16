@@ -1,0 +1,181 @@
+# Artifact-producing application.
+#
+# The reference shape for software that emits a file something else consumes:
+# exports, reports, documents, images, print output, generated archives.
+#
+# Three things to notice:
+#   1. failure modes are declared BEFORE any evidence is chosen
+#   2. every oracle is qualified with a known-bad case, because an oracle never
+#      shown to reject a wrong result is not evidence
+#   3. the two evidence paths differ on BOTH the generation axis (implementation,
+#      runtime) and the observation axis (data source, channel, reference), so
+#      they are materially independent rather than twice-named
+#
+# `producer: report-writer` is what stops the application's own success message
+# from counting as proof of its own external effect.
+#
+# Validate:  .verification/bin/cdv validate
+
+version: 1
+
+project:
+  name: artifact-producing-app-example
+  owner: example
+
+state:
+  commit: "EXAMPLE"
+  tree_hash: "EXAMPLE"
+
+oracles:
+  filesystem-readback:
+    kind: independent-technical
+    description: >
+      Read the produced artifact back from the filesystem from a process that
+      does not import the application.
+    # `declared` here keeps the example self-contained and hermetic. For a real
+    # project, executable qualification is stronger, because the engine runs both
+    # cases itself instead of taking the assertion on trust:
+    #
+    #   mode: executable
+    #   positive_command: test -s build/report.pdf && printf 'CDV_ORACLE_POSITIVE=PASS\n'
+    #   negative_command: test ! -e build/absent.pdf && printf 'CDV_ORACLE_NEGATIVE=DETECTED\n'
+    #
+    # Executable mode requires --allow-execute-oracles, and without that grant the
+    # oracle is reported unverified and blocks the critical claim. Tests/lib/
+    # edge_cases.py section C demonstrates the executable path, including an
+    # oracle that fails to detect corruption.
+    qualification:
+      mode: declared
+      positive_case:
+        description: a file known to exist was found and was non-empty
+        result: PASS
+      negative_case:
+        description: a file that was deleted was reported as absent
+        result: DETECTED
+
+  external-pdf-parser:
+    kind: external-reality
+    description: >
+      Parse the artifact with a PDF parser the producing application does not
+      own, so the application's own notion of "valid" is not what decides.
+    qualification:
+      mode: declared
+      positive_case:
+        description: a known-good PDF was accepted by the parser
+        result: PASS
+      negative_case:
+        description: >
+          A truncated PDF was rejected; the negative case is the load-bearing
+          half, because accepting valid files only shows the parser can run
+        result: DETECTED
+
+  rendered-page-check:
+    kind: cross-modal
+    description: >
+      Rasterise the artifact and inspect what is actually visible on the page,
+      which is how a structurally valid file with wrong content is caught.
+    qualification:
+      mode: declared
+      positive_case:
+        description: a page with known content was read back correctly
+        result: PASS
+      negative_case:
+        description: a blank page was reported as blank rather than as content
+        result: DETECTED
+
+claims:
+  - id: PDF-EXPORT-001
+    statement: >
+      Confirmed user data is exported into a PDF file that exists, is
+      structurally valid, and shows the confirmed data on its rendered page.
+    type: ARTIFACT
+    criticality: CRITICAL
+    producer: report-writer
+
+    failure_modes:
+      - id: NO_FILE_CREATED
+        oracle: filesystem-readback
+        description: the export reports success but no file exists
+      - id: INVALID_PDF
+        oracle: external-pdf-parser
+        description: >
+          A file exists but is truncated, corrupt, or not a PDF at all -- the
+          classic false positive, where something was written and the write is
+          mistaken for the export having worked
+      - id: WRONG_VISIBLE_CONTENT
+        oracle: rendered-page-check
+        description: >
+          A valid PDF that does not show the confirmed data, for example because
+          it rendered a template with unfilled placeholders
+
+    evidence:
+      - id: EV-EXPORT-001
+        oracle: filesystem-readback
+        result: PASS
+        evidence_type: integration
+        description: >
+          The export ran, and the path it reported was read back from a shell
+          that never imported the application; the file was present and non-empty.
+        failure_modes: [NO_FILE_CREATED]
+        dimensions:
+          model: none
+          tool: coreutils
+          implementation: filesystem-readback
+          runtime: posix-shell
+          data_source: output-directory
+          observation_channel: filesystem
+          specification_source: filesystem-semantics
+        observed_state:
+          commit: "EXAMPLE"
+          tree_hash: "EXAMPLE"
+
+      - id: EV-EXPORT-002
+        oracle: external-pdf-parser
+        result: PASS
+        evidence_type: integration
+        description: >
+          The artifact was parsed by an independent parser, which reported a
+          well-formed document with the expected page count.
+        failure_modes: [INVALID_PDF]
+        dimensions:
+          model: none
+          tool: pdfinfo
+          implementation: external-pdf-parser
+          runtime: cpython
+          data_source: produced-pdf
+          observation_channel: independent-parser
+          specification_source: pdf-specification
+        observed_state:
+          commit: "EXAMPLE"
+          tree_hash: "EXAMPLE"
+
+      - id: EV-EXPORT-003
+        oracle: rendered-page-check
+        result: PASS
+        evidence_type: visual
+        description: >
+          The first page was rasterised and the confirmed values were read back
+          from the image, which is a different observation channel from parsing
+          the file structure.
+        failure_modes: [WRONG_VISIBLE_CONTENT]
+        dimensions:
+          model: vision-model-a
+          tool: rasteriser
+          implementation: page-rasteriser
+          runtime: cpython
+          data_source: rendered-png
+          observation_channel: visual
+          specification_source: human-readable-layout-spec
+        observed_state:
+          commit: "EXAMPLE"
+          tree_hash: "EXAMPLE"
+
+    residual_uncertainty:
+      - Printer-specific rendering was not exercised on physical hardware; the
+        artifact was checked as a file and as a rendered image, not as paper.
+      - Only the first page was inspected visually; a document that overflowed
+        onto a second page with wrong content would not be caught by this
+        evidence.
+      - The external parser's own correctness was qualified by declaration, not
+        by execution, so a parser bug shared with the producer would not be
+        detected here.

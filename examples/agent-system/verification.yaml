@@ -1,0 +1,167 @@
+# Agent / automation system.
+#
+# The shape for software whose correctness is not a single artifact: a system
+# that runs, is interrupted, restarts, and is ultimately judged by whether a user
+# can accomplish a task.
+#
+# Three obligations combine here, and each one exists for a specific reason:
+#
+#   type: OUTCOME            the claim is about what the user can do, not about
+#                            what the code produced
+#   requires_temporal: true  the claim must survive a restart, so a single
+#                            successful run proves nothing
+#   external-reality oracles an agent that reports its own success is not evidence
+#                            of its own success
+#
+# Validate:  .verification/bin/cdv validate
+
+version: 1
+
+project:
+  name: agent-system-example
+  owner: example
+
+state:
+  commit: "EXAMPLE"
+  tree_hash: "EXAMPLE"
+
+oracles:
+  workspace-readback:
+    kind: independent-technical
+    description: >
+      Read the produced deliverable out of the workspace from a process that does
+      not participate in producing it.
+    qualification:
+      mode: declared
+      positive_case:
+        description: a deliverable written by hand was found and read
+        result: PASS
+      negative_case:
+        description: a deliverable that was removed was reported as missing
+        result: DETECTED
+
+  independent-renderer:
+    kind: cross-modal
+    description: >
+      Open the deliverable with a tool that has no knowledge of the producing
+      system, and read the content back from it. This is the channel that
+      distinguishes "a file was written" from "a user can use it".
+    qualification:
+      mode: declared
+      positive_case:
+        description: a known-good document was opened and its content read
+        result: PASS
+      negative_case:
+        description: a document made deliberately unreadable was reported unopenable
+        result: DETECTED
+
+claims:
+  - id: AGENT-DELIVERABLE-001
+    statement: >
+      The agent turns a request into a deliverable file in the workspace that a
+      user can open with an ordinary external tool, and the deliverable is still
+      present and readable after the agent process has been restarted.
+    type: OUTCOME
+    criticality: CRITICAL
+    requires_temporal: true
+    producer: agent-runtime
+
+    failure_modes:
+      - id: NO_DELIVERABLE
+        oracle: workspace-readback
+        description: >
+          the run reported success but no deliverable exists -- the agent's own
+          success message is the most common false positive in this shape
+      - id: DELIVERABLE_UNREADABLE_EXTERNALLY
+        oracle: independent-renderer
+        description: >
+          a file exists and the agent can read it, but an ordinary external tool
+          cannot open it, so the user's task is not actually achievable
+      - id: LOST_ON_RESTART
+        oracle: workspace-readback
+        description: >
+          the deliverable is written somewhere ephemeral and is gone after the
+          process restarts, so a one-time success proved nothing
+
+    temporal_checks:
+      - kind: repeated-execution
+        result: PASS
+        description: the same request produced the same deliverable on three runs
+      - kind: process-restart
+        result: PASS
+        description: >
+          the agent process was stopped and started again, and the deliverable
+          from the earlier run was still present and readable
+
+    evidence:
+      - id: EV-AGENT-001
+        oracle: workspace-readback
+        result: PASS
+        evidence_type: e2e
+        description: >
+          After a run, the workspace was listed from a shell that never imported
+          the agent, and the deliverable was present with non-zero size.
+        failure_modes: [NO_DELIVERABLE]
+        dimensions:
+          model: none
+          tool: coreutils
+          implementation: workspace-readback
+          runtime: posix-shell
+          data_source: workspace-directory
+          observation_channel: filesystem
+          specification_source: filesystem-semantics
+        observed_state:
+          commit: "EXAMPLE"
+          tree_hash: "EXAMPLE"
+
+      - id: EV-AGENT-002
+        oracle: workspace-readback
+        result: PASS
+        evidence_type: recovery-test
+        description: >
+          After stopping and restarting the agent process, the same readback was
+          repeated from a separate process and found the deliverable intact.
+        failure_modes: [LOST_ON_RESTART]
+        dimensions:
+          model: none
+          tool: coreutils
+          implementation: workspace-readback-after-restart
+          runtime: posix-shell
+          data_source: workspace-directory-after-restart
+          observation_channel: filesystem-after-process-restart
+          specification_source: filesystem-semantics
+        observed_state:
+          commit: "EXAMPLE"
+          tree_hash: "EXAMPLE"
+
+      - id: EV-AGENT-003
+        oracle: independent-renderer
+        result: PASS
+        evidence_type: external-artifact-validation
+        description: >
+          The deliverable was opened with an ordinary external tool that has no
+          knowledge of the agent, and the requested content was read back from it.
+        failure_modes: [DELIVERABLE_UNREADABLE_EXTERNALLY]
+        dimensions:
+          model: vision-model-a
+          tool: external-document-viewer
+          implementation: independent-renderer
+          runtime: cpython
+          data_source: rendered-document
+          observation_channel: visual
+          specification_source: user-visible-content-spec
+        observed_state:
+          commit: "EXAMPLE"
+          tree_hash: "EXAMPLE"
+
+    residual_uncertainty:
+      - Only one request shape was exercised end to end; other request types were
+        not represented in the temporal checks, so an ephemeral-path bug specific
+        to another request type would not be caught here.
+      - The external renderer was qualified by declaration rather than by
+        execution, so a rendering bug shared with the environment would not be
+        distinguished.
+      - Restart was exercised as a graceful stop and start. Crash recovery and
+        mid-write interruption were not tested.
+      - The visual check used a model that is not calibrated against a held-out
+        set, so its error rate on this task is unknown.

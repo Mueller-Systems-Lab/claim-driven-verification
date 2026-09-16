@@ -1,0 +1,142 @@
+# Minimal example: the smallest honest document.
+#
+# One claim, two materially independent evidence paths, an explicit note about
+# what was not checked, and one reviewed criticality exception. Copy this when
+# you are starting out.
+#
+# Validate:  .verification/bin/cdv validate
+#
+# The state values are fixed sentinels so the example is self-contained. A real
+# project gets real values from `.verification/bin/cdv fingerprint`.
+
+version: 1
+
+project:
+  name: minimal-example
+  owner: example
+
+state:
+  commit: "EXAMPLE"
+  tree_hash: "EXAMPLE"
+
+# A NOTE ON THE EXCEPTION BELOW, because it is the most instructive part of this
+# example.
+#
+# The claim's statement contains the phrase "output file", which matches the
+# `generated-artifact` criticality trigger. The engine therefore treats the claim
+# as CRITICAL and reports CRITICALITY_REVIEW_INCOMPLETE unless a review is
+# recorded here.
+#
+# The tempting response is to reword the statement until the trigger stops
+# firing. That is the wrong response, and this example deliberately does not take
+# it: rewording a claim to avoid scrutiny is the precise behaviour the trigger
+# table exists to surface. The documented response is a recorded review.
+#
+# Note what the exception does and does not do. It permits the NON_CRITICAL
+# label, it is reported as a warning, and the claim is STILL evaluated with the
+# critical rule set. So the review is an acknowledgement, never a way to lower
+# the evidence bar -- which is why this example also has two independent evidence
+# paths and qualified oracles, exactly as a critical claim would.
+criticality_exceptions:
+  - claim_id: CLI-RUNS-001
+    justification: >
+      Reviewed with the maintainer: the "output file" here is a local scratch
+      artifact written inside the working directory of a developer tool. It is
+      never sent anywhere, never read by another system, and is deleted before
+      each run. The trigger fires on the wording rather than on a real artifact
+      surface, so the critical evidence bar is not proportionate.
+    reviewed_by: maintainer
+    reviewed_at: "2026-01-15"
+
+oracles:
+  process-exit:
+    kind: independent-technical
+    description: observe the exit status and stdout of a separate process
+    qualification:
+      mode: declared
+      positive_case:
+        description: a command that exits 0 was reported as succeeding
+        result: PASS
+      negative_case:
+        description: a command made to exit 1 was reported as failing
+        result: DETECTED
+
+  filesystem-readback:
+    kind: independent-technical
+    description: read the produced output back from the filesystem
+    qualification:
+      mode: declared
+      positive_case:
+        description: a file known to exist was found
+        result: PASS
+      negative_case:
+        description: a file that was deleted was reported as absent
+        result: DETECTED
+
+claims:
+  - id: CLI-RUNS-001
+    statement: >
+      The project's command line entry point runs to completion and writes its
+      configured output file to the path it reports.
+    type: STATE
+    criticality: NON_CRITICAL
+    criticality_rationale: >
+      This claim asserts only that local developer tooling starts, runs and
+      writes a file inside the working directory. It touches no money, personal
+      data, credentials, durable storage or anything outside the developer's own
+      machine, so a false PASS here cannot cause harm beyond a wasted debugging
+      session.
+
+    failure_modes:
+      - id: COMMAND_FAILS
+        oracle: process-exit
+        description: the entry point exits non-zero or not at all
+      - id: OUTPUT_PATH_WRONG
+        oracle: filesystem-readback
+        description: the command reports a path at which no file exists
+
+    evidence:
+      - id: EV-RUN-001
+        oracle: process-exit
+        result: PASS
+        evidence_type: integration
+        description: >
+          The entry point was invoked in a subprocess and exited 0 within its
+          documented timeout.
+        failure_modes: [COMMAND_FAILS]
+        dimensions:
+          model: none
+          tool: subprocess
+          implementation: process-exit-observer
+          runtime: cpython
+          data_source: process-status
+          observation_channel: process-exit-code
+          specification_source: documented-cli-contract
+        observed_state:
+          commit: "EXAMPLE"
+          tree_hash: "EXAMPLE"
+
+      - id: EV-RUN-002
+        oracle: filesystem-readback
+        result: PASS
+        evidence_type: integration
+        description: >
+          The path printed by the command was read from a shell that never
+          imported the project, and the file was present and non-empty.
+        failure_modes: [OUTPUT_PATH_WRONG]
+        dimensions:
+          model: none
+          tool: coreutils
+          implementation: filesystem-readback
+          runtime: posix-shell
+          data_source: output-file
+          observation_channel: filesystem
+          specification_source: filesystem-semantics
+        observed_state:
+          commit: "EXAMPLE"
+          tree_hash: "EXAMPLE"
+
+    residual_uncertainty:
+      - Behaviour on operating systems other than Linux was not exercised.
+      - The file's contents were checked for presence and size, not for
+        correctness; a claim about its contents would need its own evidence.

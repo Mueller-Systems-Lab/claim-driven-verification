@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""Repository-local cdv launcher.
+
+The installed copy of this launcher (written by installer/install.sh into
+``<target>/.verification/bin/cdv``) is generated from the same source, so there
+is exactly one way to reach the engine.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CORE = os.path.join(os.path.dirname(HERE), "core")
+sys.path.insert(0, CORE)
+
+from cdv.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

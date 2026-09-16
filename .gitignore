@@ -1,0 +1,14 @@
+# Byte-compiled / optimised files
+__pycache__/
+*.py[cod]
+
+# Installer scratch
+*.install.log
+.cdv-*
+
+# Verification run-time artifacts that must never be committed
+.verification/audit.log
+
+# Editor / OS noise
+.DS_Store
+*.swp
