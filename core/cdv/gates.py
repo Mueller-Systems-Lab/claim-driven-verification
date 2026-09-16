@@ -427,7 +427,6 @@ def _evaluate_claim(
     criticality_exceptions: list[Any],
     project_dir: str,
     allow_execute: bool,
-    document_findings: list[Finding],
 ) -> ClaimResult:
     result = ClaimResult(
         claim_id=f"<claim#{index}>",
@@ -726,9 +725,12 @@ def _evaluate_claim(
             oracle_ids.append(oid)
     result.oracles_used = oracle_ids
 
-    qualified: dict[str, dict[str, Any] | None] = {}
+    # Qualification findings are emitted as a side effect; the result itself is
+    # not carried forward, because "is this oracle qualified" is decided once and
+    # never re-consulted. A local that is written and never read invites a reader
+    # to believe a decision depends on it.
     for oid in oracle_ids:
-        qualified[oid] = qualify_oracle(
+        qualify_oracle(
             oid,
             oracles,
             project_dir,
@@ -867,7 +869,6 @@ def _evaluate_claim(
     # same failure, and the architecture wants exactly that kind of independent
     # detection. The declared oracle is still required to exist and be qualified.
     coverage: dict[str, list[str]] = {}
-    uncovered: list[str] = []
     for fm in failure_modes:
         fm = _mapping(fm)
         fm_id = _text(fm.get("id")) or f"<fm>"
@@ -884,7 +885,6 @@ def _evaluate_claim(
             passing.append(ev_id)
         coverage[fm_id] = sorted(passing)
         if not passing:
-            uncovered.append(fm_id)
             findings.append(
                 Finding(
                     rule=RULE_FAILURE_MODE_UNCOVERED,
@@ -1426,7 +1426,6 @@ def validate(
             criticality_exceptions=crit_exceptions,
             project_dir=project_dir,
             allow_execute=allow_execute_oracles,
-            document_findings=findings,
         )
         claims.append(claim_result)
 

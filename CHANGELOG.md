@@ -53,13 +53,18 @@ First release. The bootstrap repository is created and validated end to end.
   blocks an invalid completion while permitting a valid one, and the installation
   independently reads back as matching its manifest.
 - **Test suites**:
-  - 15 differential canaries (`tests/lib/canaries.py`) — one passing baseline plus
-    fifteen single-mutation defects, each asserted to fail for the specific rule
-    meant to detect it
+  - 15 canaries (`tests/lib/canaries.py`) — one passing baseline plus fourteen
+    defect cases built from thirteen distinct single mutations, each asserted to
+    fail for the specific rule meant to detect it. Building the negatives as
+    single mutations of a passing baseline is what makes the suite meaningful: a
+    gate that always failed would satisfy "the defect fails" and be caught by the
+    baseline, and a gate that always passed would be caught by the defects.
   - 20 edge cases and positive-path tests (`tests/lib/edge_cases.py`), including
     fault injection against the oracle-qualification machinery and validation of
-    every shipped example
-  - end-to-end enforcement canary (`tests/e2e/enforcement_canary.py`) — 19 checks
+    every shipped example. The positive-path tests exist because asserting only
+    that a waiver blocks when absent would be satisfied by a waiver that never
+    works.
+  - end-to-end enforcement canary (`tests/e2e/enforcement_canary.py`) — 20 checks
     using world-state readback and the guard's audit log as independent channels,
     with unconditional harness sanity gates
   - independent readback (`tests/independent_readback.py`) — re-hashes the

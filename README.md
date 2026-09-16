@@ -50,8 +50,11 @@ the gate is not PASS.
 
 ```
 POSITIVE CANARY   a complete, correctly evidenced claim set   -> must PASS
-NEGATIVE CANARY   fifteen documented defects, one at a time   -> each must FAIL,
-                  each for the specific rule meant to detect it
+NEGATIVE CANARIES fourteen defect cases built from thirteen
+                  distinct single mutations: each differs from
+                  the passing baseline by exactly one
+                  documented change, and each must FAIL for the
+                  specific rule meant to detect it
 END TO END        in a real project, with a real runtime:
                     gate FAIL -> a completion action is refused,
                                  and the world is unchanged

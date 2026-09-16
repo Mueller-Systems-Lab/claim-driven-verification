@@ -140,13 +140,3 @@ def match_criticality_triggers(*texts: object) -> dict[str, list[str]]:
         if hits:
             matched[area] = hits
     return matched
-
-
-def claim_type_requires(*claim_type: str) -> dict[str, bool]:
-    """Per-claim-type additional obligations, beyond criticality."""
-    ct = claim_type.upper() if claim_type else ""
-    return {
-        "temporal": ct == "TEMPORAL",
-        "world": ct == "OUTCOME",
-        "user_outcome": ct == "OUTCOME",
-    }
