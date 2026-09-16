@@ -61,7 +61,16 @@ This is a project's whole footprint: one directory, one plugin file, one documen
 **Idempotent.** Re-running upgrades an existing installation.
 
 **Non-destructive.** `verification.yaml` is never overwritten. An installation
-being replaced is moved to `.verification.backup.<timestamp>` first.
+being replaced is moved to `.verification.backup.<timestamp>` first. Re-installing
+repeatedly therefore leaves one backup per upgrade. They are never deleted
+automatically — removing a previous installation is a destructive action and
+better done deliberately than by a script. Clean them up when you are satisfied
+the upgrade is good:
+
+```bash
+ls -d /path/to/target/.verification.backup.*     # review
+rm -rf /path/to/target/.verification.backup.*    # remove
+```
 
 **Version-aware.** A newer installed version is not silently downgraded; the
 installer refuses and tells you to pass `--force`.

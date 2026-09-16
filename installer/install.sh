@@ -575,9 +575,32 @@ else
   else
     ok "canary model: ${E2E_MODEL}"
     TEMP_TARGET="$(mktemp -d "${TMPDIR:-/tmp}/cdv-target-XXXXXX")"
+    # The enforcement canary's positive control commits, so the throwaway target
+    # needs to be a real repository with a real initial commit.
+    git -C "$TEMP_TARGET" init -q 2>/dev/null
+    printf '# clean target project for the enforcement canary\n' > "${TEMP_TARGET}/README.md"
+    git -C "$TEMP_TARGET" add -A >/dev/null 2>&1
+    git -C "$TEMP_TARGET" -c user.email=cdv@invalid -c user.name=cdv \
+        commit -qm "initial" >/dev/null 2>&1
     ok "bootstrapping a clean target project at ${TEMP_TARGET}"
     if "$0" --no-e2e --quiet "$TEMP_TARGET" > "${TEMP_TARGET}.install.log" 2>&1; then
-      ok "clean target project bootstrapped"
+      NESTED_OK=1
+    else
+      # The nested install gates its own PASS on the E2E, which is deliberately
+      # skipped here, so its exit code is non-zero by design. Judging it by exit
+      # code would make this step fail every time it worked. Judge it by the
+      # component states it actually reported instead.
+      NESTED_OK=0
+    fi
+    NESTED_LOG="${TEMP_TARGET}.install.log"
+    nested_state() { grep -m1 "^$1=" "$NESTED_LOG" 2>/dev/null | cut -d= -f2-; }
+    NESTED_STATIC="$(nested_state STATIC_CHECKS)"
+    NESTED_CANARY="$(nested_state CANARY_SUITE)"
+    NESTED_READBACK="$(nested_state INDEPENDENT_READBACK)"
+    NESTED_INSTALLER="$(nested_state INSTALLER_STATUS)"
+    if [ "$NESTED_STATIC" = "PASS" ] && [ "$NESTED_CANARY" = "PASS" ] \
+       && [ "$NESTED_READBACK" = "PASS" ] && [ "$NESTED_INSTALLER" = "INSTALLED" ]; then
+      ok "clean target bootstrapped (engine + canaries + readback all verified there)"
       E2E_ARGS=(--project "$TEMP_TARGET" --model "$E2E_MODEL" --timeout "$E2E_TIMEOUT")
       [ "$VERBOSE" -eq 1 ] && E2E_ARGS+=(--verbose)
       if "$PYTHON_BIN" "${SRC_ROOT}/tests/e2e/enforcement_canary.py" "${E2E_ARGS[@]}"; then
@@ -588,8 +611,11 @@ else
         R[REAL_TARGET_BOOTSTRAP]=FAIL
       fi
     else
-      err "could not bootstrap the clean target project"
-      sed 's/^/       /' "${TEMP_TARGET}.install.log" | tail -20 >&2
+      err "the clean target project did not bootstrap correctly"
+      printf '       installer=%s static=%s canaries=%s readback=%s\n' \
+        "${NESTED_INSTALLER:-MISSING}" "${NESTED_STATIC:-MISSING}" \
+        "${NESTED_CANARY:-MISSING}" "${NESTED_READBACK:-MISSING}" >&2
+      sed 's/^/       /' "$NESTED_LOG" | tail -20 >&2
       R[E2E_STATUS]=FAIL
       R[REAL_TARGET_BOOTSTRAP]=FAIL
     fi
@@ -657,11 +683,12 @@ FINAL_CLASSIFICATION=${CLASSIFICATION}
 BOOTSTRAP_REPOSITORY=claim-driven-verification
 BOOTSTRAP_VERSION=${BOOTSTRAP_VERSION}
 OPEN_CODE_RUNTIME=${R[OPENCODE_RUNTIME]}:${R[OPENCODE_VERSION]}
-PLUGIN_OR_GUARD_STATUS=${R[GUARD_STATUS]}
+PLUGIN_OR_GUARD_STATUS=$([ "${R[E2E_STATUS]}" = "PASS" ] && echo "ACTIVE_AND_ENFORCING" || echo "INSTALLED_UNVERIFIED")
 SCHEMA_STATUS=${R[SCHEMA_STATUS]}
 INSTALLER_STATUS=${R[ENGINE_STATUS]}
 POSITIVE_CANARY=${R[POSITIVE_CANARY]:-UNKNOWN}
 NEGATIVE_CANARY=${R[NEGATIVE_CANARY]:-UNKNOWN}
+CANARY_SUITE=${R[CANARY_STATUS]}
 INDEPENDENCE_GATE=${INDEPENDENCE_GATE:-NOT_OBSERVED}
 ORACLE_QUALIFICATION_GATE=${ORACLE_GATE:-NOT_OBSERVED}
 CONFLICT_GATE=${CONFLICT_GATE:-NOT_OBSERVED}
