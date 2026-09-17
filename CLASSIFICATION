@@ -19,5 +19,5 @@
 # describing the publication, not the repository. That is recorded in the
 # publication report, not here: this file describes the repository's own state.
 
-CLASSIFICATION_VERIFIED=V1_0_1_HARDENING_VERIFIED
-CLASSIFICATION_INCOMPLETE=V1_0_1_HARDENING_INCOMPLETE
+CLASSIFICATION_VERIFIED=V1_0_2_CORRECTIVE_VERIFIED
+CLASSIFICATION_INCOMPLETE=V1_0_2_CORRECTIVE_INCOMPLETE

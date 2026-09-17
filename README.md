@@ -129,6 +129,32 @@ and counts for nothing, because naming two tools differently is the cheapest way
 to fake rigour. Grades are qualitative — LOW / MEDIUM / HIGH — with no invented
 probability, because no empirical calibration exists to justify a number.
 
+### Packaging claims are verified against the installed target
+
+> SOURCE_TREE_PASS != INSTALLED_PACKAGE_PASS
+
+For any packaging claim, the oracle must execute against the installed target. A
+suite that passes in the source tree says nothing about what a target receives, and
+this is not hypothetical: `edge_cases.py` was installed into every target while
+depending on the repository's `examples/` directory, so it aborted with
+`FileNotFoundError` in every target and passed perfectly in the repository.
+
+Every installed file now has a declared role — `RUNTIME_REQUIRED`,
+`TARGET_TEST_REQUIRED`, `DOCUMENTATION_REQUIRED` or
+`INTENTIONALLY_INSTALLED_DATA` — and anything installed with no role fails the
+gate. Components that check the repository's own scripts or run the repository's
+installer are source-tree-only and are not installed at all.
+
+### Shell strict-mode reliability is gated
+
+`tests/verify.sh` and `installer/install.sh` run under `set -u`, where an undefined
+or out-of-order variable aborts the run part-way through — a class that produced
+three defects during development and that `bash -n` cannot see. ShellCheck runs
+with `--enable=all` (SC2154 is an optional check and silent otherwise), and because
+ShellCheck demonstrably does **not** detect the use-before-assignment variant, a
+small deterministic scan covers that. Style-only findings are reported, never
+gated.
+
 ### Context integrity comes before interpretation
 
 Added in v1.0.1, after a real false PASS. A verification result is invalid until

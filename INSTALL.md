@@ -98,6 +98,28 @@ cannot buy a PASS — is tested explicitly by the end-to-end canary.
 | 2 | usage error |
 | 3 | missing prerequisite |
 
+### The installed test surface
+
+Only components that are meant to run **inside** a target are installed. The
+repository's development-only gates are not:
+
+| Installed under `.verification/tests/` | Runs in a target |
+| --- | --- |
+| `lib/canaries.py` | library for the canary suite |
+| `lib/canary_runner.py` | yes |
+| `lib/static_checks.py` | yes (repository-only checks report `NOT_APPLICABLE` explicitly) |
+| `lib/context_canaries.py` | yes |
+| `e2e/enforcement_canary.py` | yes, given a model |
+| `independent_readback.py` | yes, given `--source <bootstrap>` |
+
+Not installed, because they are repository-development gates rather than target
+components: `lib/edge_cases.py` (validates the repository's `examples/`),
+`lib/shell_check.py`, `lib/packaging_check.py` and `tests/verify.sh`.
+
+The packaging gate enforces this: a fresh install is created and every installed
+entry point is executed in that target. Adding a file to the installer without
+deciding its role fails the gate.
+
 ### Final classification
 
 `FINAL_CLASSIFICATION` is not hardcoded. Both the installer and `tests/verify.sh`
