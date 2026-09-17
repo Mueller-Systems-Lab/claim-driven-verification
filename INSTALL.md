@@ -98,6 +98,16 @@ cannot buy a PASS — is tested explicitly by the end-to-end canary.
 | 2 | usage error |
 | 3 | missing prerequisite |
 
+### Final classification
+
+`FINAL_CLASSIFICATION` is not hardcoded. Both the installer and `tests/verify.sh`
+read the canonical label from the `CLASSIFICATION` file at the repository root
+(`CLASSIFICATION_VERIFIED` / `CLASSIFICATION_INCOMPLETE`), which is why the two
+reports cannot disagree. The label names the release it describes, and the static
+checks fail if it stops matching `VERSION`. A published release additionally
+reports a classification describing the publication, which is recorded in the
+publication report rather than in this file.
+
 ## Verify an existing installation
 
 ```bash

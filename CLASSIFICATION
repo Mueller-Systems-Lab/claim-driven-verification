@@ -1,0 +1,23 @@
+# Canonical verification classifications.
+#
+# Single source of truth for the FINAL_CLASSIFICATION field emitted by the
+# installer and by tests/verify.sh. Both read this file rather than each
+# hardcoding a label, because two copies of a label is how two reports come to
+# disagree -- which happened once already, with CANARY_SUITE being emitted by one
+# report and not the other.
+#
+# The label is release-scoped: it must name the release whose verification state
+# it describes, so a report cannot silently carry a previous release's
+# classification. tests/lib/static_checks.py asserts that the version digits in
+# CLASSIFICATION_VERIFIED match the VERSION file, and fails if they drift.
+#
+# CLASSIFICATION_VERIFIED   all gates in this repository passed
+# CLASSIFICATION_INCOMPLETE at least one gate did not
+#
+# A publication run (repository pushed, tag and release cut, and a clean target
+# bootstrapped from the published URL) carries a separate, higher classification
+# describing the publication, not the repository. That is recorded in the
+# publication report, not here: this file describes the repository's own state.
+
+CLASSIFICATION_VERIFIED=V1_0_1_HARDENING_VERIFIED
+CLASSIFICATION_INCOMPLETE=V1_0_1_HARDENING_INCOMPLETE

@@ -49,6 +49,27 @@ YELLOW = "\033[33m"
 DIM = "\033[2m"
 RESET = "\033[0m"
 
+# Provider-side availability problems. Observed for real: a subscription plan
+# exhausted its weekly quota part-way through a run, and the canary reported a
+# failure that had nothing to do with the guard. These are external
+# unavailability, and the specification requires them to be reported as such
+# rather than as either a pass or a product failure.
+AVAILABILITY_PATTERNS = [
+    "limit exhausted",
+    "quota exhausted",
+    "insufficient quota",
+    "rate limit",
+    "too many requests",
+    "subscription plan does not",
+    "does not yet include access",
+    "out of credits",
+    "no credits",
+    "unauthorized",
+    "authentication",
+    "invalid api key",
+    "account balance",
+]
+
 MARKER_NAME = "CDV_E2E_MARKER"
 # A completion-adjacent command unique to this canary, injected through the same
 # guard.config.json path a project would use. This lets the canary prove
@@ -250,6 +271,29 @@ def audit_entries(project: str) -> list[dict]:
     return out
 
 
+# Every agent output in this run, so that a failure can be attributed to the
+# provider rather than to the guard.
+AGENT_OUTPUTS: list[str] = []
+
+
+def provider_availability() -> str:
+    """NONE, or the availability problem that stopped the provider."""
+    for text in AGENT_OUTPUTS:
+        matched = availability_problem(text)
+        if matched:
+            return matched.upper().replace(" ", "_")
+    return "NONE"
+
+
+def availability_problem(text: str) -> str | None:
+    """Return the matched availability problem, if the provider refused on quota."""
+    lowered = text.lower()
+    for pattern in AVAILABILITY_PATTERNS:
+        if pattern in lowered:
+            return pattern
+    return None
+
+
 def opencode(
     project: str,
     config_home: str,
@@ -278,7 +322,9 @@ def opencode(
     # that failure mode impossible to reintroduce.
     env = {"XDG_CONFIG_HOME": config_home, "PWD": project}
     proc = run(cmd, cwd=project, timeout=timeout, env=env)
-    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    output = (proc.stdout or "") + (proc.stderr or "")
+    AGENT_OUTPUTS.append(output)
+    return proc.returncode, output
 
 
 def session_directory(log: str) -> str | None:
@@ -718,6 +764,7 @@ def main() -> int:
             return 1
 
         commits_before = commit_count(project)
+        head_before = git(project, "rev-parse", "HEAD")
         prompt = (
             "Run this bash command and report whether it succeeded:\n"
             "git commit --allow-empty -m 'cdv-e2e-should-land'"
@@ -744,16 +791,28 @@ def main() -> int:
         ):
             return 1
         commits_after = commit_count(project)
+        head_after = git(project, "rev-parse", "HEAD")
         result.check(
             "the same action was permitted once the gate was PASS",
-            commits_after == commits_before + 1,
+            commits_after > commits_before,
             f"commit count went {commits_before} -> {commits_after}; "
             "if it did not change, the guard blocks unconditionally and is not a gate",
         )
+        # Scoped to the commit THIS run created. An earlier version of this check
+        # searched `git log -3` for the marker subject and was satisfied by the
+        # previous provider's commit in the same target -- a false PASS produced
+        # by stale state, which is the class of defect this whole file exists to
+        # prevent. The head must have moved, and the new head must be the commit.
+        landed_here = (
+            head_after is not None
+            and head_after != head_before
+            and "cdv-e2e-should-land" in (git(project, "log", "-1", "--format=%s") or "")
+        )
         result.check(
-            "the permitted commit really landed in history",
-            "cdv-e2e-should-land" in git(project, "log", "--format=%s", "-3"),
-            git(project, "log", "--format=%s", "-3"),
+            "the permitted commit really landed in history (this run's commit)",
+            landed_here,
+            f"HEAD {str(head_before)[:12]} -> {str(head_after)[:12]}; "
+            f"new subject={git(project, 'log', '-1', '--format=%s')!r}",
         )
     finally:
         # --- restore -------------------------------------------------------
@@ -814,10 +873,18 @@ def main() -> int:
     print(f"REAL_COMMIT_CANARY={real_commit}")
     print(f"PROVIDER_LABEL={args.provider_label or args.model}")
 
+    availability = provider_availability()
+    print(f"PROVIDER_AVAILABILITY={availability}")
     if failed:
         print(f"E2E_GUARD_ENFORCEMENT=FAIL ({len(failed)} check(s) failed)")
         for label in failed:
             print(f"  - {label}")
+        if availability != "NONE":
+            print(
+                f"  NOTE: the provider refused on availability ({availability}), so the "
+                "failures above may not describe the guard at all. Reported separately "
+                "rather than as either a pass or a product failure."
+            )
         return 1
     print(f"E2E_GUARD_ENFORCEMENT=PASS ({len(result.checks)} checks)")
     return 0

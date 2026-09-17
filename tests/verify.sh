@@ -40,6 +40,13 @@ RUN_E2E=1
 KEEP=0
 VERBOSE=0
 MODEL="${CDV_E2E_MODEL:-}"
+# Candidate second providers, tried in order, all already authorised at zero
+# marginal cost: a subscription plan, then models published as :free. verify.sh
+# uses the first that demonstrably drives a tool. Declared here rather than only
+# by the flag, because with `set -u` an undeclared variable is an error and the
+# script would break when --second-model was omitted -- which is exactly how the
+# earlier VERBOSE bug reached a release.
+SECOND_MODEL="${CDV_E2E_SECOND_MODEL:-zai-coding-plan/glm-4.7,openrouter/cohere/north-mini-code:free}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -279,16 +286,49 @@ else
     # argued from the source; it has to be run against a second model. Only
     # providers already authorised at zero marginal cost are used, so this
     # demonstrates diversity without introducing paid external usage.
+    # Pick the first candidate that can actually drive a tool. Anything else
+    # cannot exercise the guard, so reporting it as a provider failure would be
+    # measuring the wrong thing; and a probe that only asks the model to say a
+    # word would not notice the difference.
+    SECOND_MODEL_ACTIVE=""
+    if [ -n "$SECOND_MODEL" ]; then
+      OLD_IFS="$IFS"
+      IFS=','
+      for candidate in $SECOND_MODEL; do
+        IFS="$OLD_IFS"
+        [ -n "$candidate" ] || continue
+        PROBE_MARKER="CDV-PROBE-$$"
+        PROBE_OUT="$(cd "$TARGET" && PWD="$TARGET" XDG_CONFIG_HOME="$TARGET/.cdv-probe-config" \
+          timeout 150 opencode run --auto --agent build -m "$candidate" \
+          "Run the bash command: echo $PROBE_MARKER   Then report its exact stdout." 2>&1 || true)"
+        if printf '%s' "$PROBE_OUT" | grep -q "$PROBE_MARKER"; then
+          SECOND_MODEL_ACTIVE="$candidate"
+          printf '  %s--%s   second provider reachable and tool-capable: %s\n' \
+            "$C_DIM" "$C_RESET" "$candidate"
+          break
+        elif printf '%s' "$PROBE_OUT" | grep -qiE 'limit exhausted|quota|does not yet include access|free model training violation'; then
+          printf '  %swarn%s %s refused on availability; trying the next candidate\n' \
+            "$C_YELLOW" "$C_RESET" "$candidate"
+        else
+          printf '  %swarn%s %s did not demonstrate tool use; trying the next candidate\n' \
+            "$C_YELLOW" "$C_RESET" "$candidate"
+        fi
+        IFS=','
+      done
+      IFS="$OLD_IFS"
+      rm -rf "$TARGET/.cdv-probe-config"
+    fi
+
     if [ -z "$SECOND_MODEL" ]; then
       printf '  %swarn%s no second provider configured; recorded as residual uncertainty\n' \
         "$C_YELLOW" "$C_RESET"
       R_SECOND=NOT_CONFIGURED
-    elif ! timeout 120 opencode run --auto --agent build -m "$SECOND_MODEL" \
-           "Reply with the single word READY." >/dev/null 2>&1; then
-      printf '  %swarn%s second provider %s is not reachable or not authorised; recorded as residual uncertainty\n' \
-        "$C_YELLOW" "$C_RESET" "$SECOND_MODEL"
+    elif [ -z "$SECOND_MODEL_ACTIVE" ]; then
+      printf '  %swarn%s no candidate second provider was reachable and tool-capable\n' \
+        "$C_YELLOW" "$C_RESET"
       R_SECOND=BLOCKED_EXTERNAL_AVAILABILITY
     else
+      SECOND_MODEL="$SECOND_MODEL_ACTIVE"
       printf '  %s--%s   second canary model: %s\n' "$C_DIM" "$C_RESET" "$SECOND_MODEL"
       SECOND_LOG="$(mktemp "${TMPDIR:-/tmp}/cdv-second-XXXXXX")"
       if "$PYTHON_BIN" "${REPO_ROOT}/tests/e2e/enforcement_canary.py" \
@@ -297,7 +337,19 @@ else
            > "$SECOND_LOG" 2>&1; then
         R_SECOND=PASS
       else
-        R_SECOND=FAIL; note_fail "guard enforcement end to end (second provider)"
+        # A provider that refused on quota or authentication has not told us
+        # anything about the guard. The specification requires that to be
+        # reported as external unavailability and retained as residual
+        # uncertainty -- never as success, and never as a product failure either.
+        SECOND_AVAILABILITY="$(grep -m1 '^PROVIDER_AVAILABILITY=' "$SECOND_LOG" | cut -d= -f2)"
+        if [ -n "$SECOND_AVAILABILITY" ] && [ "$SECOND_AVAILABILITY" != "NONE" ]; then
+          printf '  %swarn%s second provider refused on availability (%s)\n' \
+            "$C_YELLOW" "$C_RESET" "$SECOND_AVAILABILITY"
+          printf '       not counted as a pass and not counted as a guard failure\n'
+          R_SECOND=BLOCKED_EXTERNAL_AVAILABILITY
+        else
+          R_SECOND=FAIL; note_fail "guard enforcement end to end (second provider)"
+        fi
       fi
       tail -25 "$SECOND_LOG"
       rm -f "$SECOND_LOG"
@@ -368,10 +420,19 @@ if [ "$R_STATIC" = "PASS" ] && [ "$R_CANARY" = "PASS" ] && [ "$R_EDGE" = "PASS" 
   BOOTSTRAP=PASS
 fi
 
+CLASSIFICATION_FILE="${REPO_ROOT}/CLASSIFICATION"
+CLASSIFICATION_VERIFIED="$(sed -n 's/^CLASSIFICATION_VERIFIED=//p' "$CLASSIFICATION_FILE" 2>/dev/null | head -1)"
+CLASSIFICATION_INCOMPLETE="$(sed -n 's/^CLASSIFICATION_INCOMPLETE=//p' "$CLASSIFICATION_FILE" 2>/dev/null | head -1)"
+if [ -z "$CLASSIFICATION_VERIFIED" ] || [ -z "$CLASSIFICATION_INCOMPLETE" ]; then
+  printf '%serr%s  cannot read the canonical classifications from %s\n' \
+    "$C_RED" "$C_RESET" "$CLASSIFICATION_FILE" >&2
+  exit 3
+fi
+
 if [ "$BOOTSTRAP" = "PASS" ]; then
-  CLASSIFICATION=BOOTSTRAP_VERIFIED
+  CLASSIFICATION="$CLASSIFICATION_VERIFIED"
 else
-  CLASSIFICATION=BOOTSTRAP_INCOMPLETE
+  CLASSIFICATION="$CLASSIFICATION_INCOMPLETE"
 fi
 
 OPENCODE_RUNTIME=NOT_DETECTED
