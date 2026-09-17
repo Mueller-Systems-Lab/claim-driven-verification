@@ -9,7 +9,7 @@ __all__ = ["__version__"]
 
 # Version of the *engine implementation*. Kept in sync with the repository
 # VERSION file by release engineering; asserted by the bootstrap self-test.
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 # Version of the verification.yaml contract this engine understands.
 SCHEMA_VERSION = 1

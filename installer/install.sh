@@ -35,7 +35,6 @@ else
 fi
 
 QUIET=0
-say()  { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
 ok()   { printf '  %sok%s   %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '  %swarn%s %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
 err()  { printf '  %serr%s  %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
@@ -138,7 +137,6 @@ fatal() {
 # 1. PREFLIGHT
 # ---------------------------------------------------------------------------
 section "1/12  PREFLIGHT"
-PREFLIGHT_OK=1
 
 if [ ! -f "${SRC_ROOT}/VERSION" ]; then
   fatal "source repository is incomplete: ${SRC_ROOT}/VERSION is missing"
@@ -167,8 +165,11 @@ for required in core/cdv/cli.py bin/cdv templates/verification.yaml \
                 schema/verification.schema.json \
                 runtime/opencode/verification-guard.ts \
                 tests/lib/canaries.py tests/lib/canary_runner.py \
-                tests/lib/static_checks.py tests/lib/edge_cases.py \
+                tests/lib/static_checks.py \
                 tests/lib/context_canaries.py \
+                tests/lib/edge_cases.py \
+                tests/lib/shell_check.py \
+                tests/lib/packaging_check.py \
                 CLASSIFICATION \
                 tests/e2e/enforcement_canary.py \
                 tests/independent_readback.py; do
@@ -342,7 +343,6 @@ mkdir -p "${ENGINE_DIR}/tests/lib" "${ENGINE_DIR}/tests/e2e"
 cp "${SRC_ROOT}/tests/lib/canaries.py" "${ENGINE_DIR}/tests/lib/"
 cp "${SRC_ROOT}/tests/lib/canary_runner.py" "${ENGINE_DIR}/tests/lib/"
 cp "${SRC_ROOT}/tests/lib/static_checks.py" "${ENGINE_DIR}/tests/lib/"
-cp "${SRC_ROOT}/tests/lib/edge_cases.py" "${ENGINE_DIR}/tests/lib/"
 cp "${SRC_ROOT}/tests/lib/context_canaries.py" "${ENGINE_DIR}/tests/lib/"
 cp "${SRC_ROOT}/tests/e2e/enforcement_canary.py" "${ENGINE_DIR}/tests/e2e/"
 cp "${SRC_ROOT}/tests/independent_readback.py" "${ENGINE_DIR}/tests/"
@@ -459,7 +459,6 @@ rm -f "${TARGET}/.cdv-static.log"
 # ---------------------------------------------------------------------------
 section "10/12  CANARY SUITE (installed engine)"
 if "$PYTHON_BIN" "${ENGINE_DIR}/tests/lib/canary_runner.py" > "${TARGET}/.cdv-canary.log" 2>&1; then
-  POSITIVE="$(grep -c 'baseline_positive' "${TARGET}/.cdv-canary.log" || true)"
   R[POSITIVE_CANARY]=PASS
   R[NEGATIVE_CANARY]=PASS
   R[CANARY_STATUS]=PASS
@@ -605,15 +604,11 @@ else
     git -C "$TEMP_TARGET" -c user.email=cdv@invalid -c user.name=cdv \
         commit -qm "initial" >/dev/null 2>&1
     ok "bootstrapping a clean target project at ${TEMP_TARGET}"
-    if "$0" --no-e2e --quiet "$TEMP_TARGET" > "${TEMP_TARGET}.install.log" 2>&1; then
-      NESTED_OK=1
-    else
-      # The nested install gates its own PASS on the E2E, which is deliberately
-      # skipped here, so its exit code is non-zero by design. Judging it by exit
-      # code would make this step fail every time it worked. Judge it by the
-      # component states it actually reported instead.
-      NESTED_OK=0
-    fi
+    # The nested install gates its own PASS on the E2E, which is deliberately
+    # skipped here, so its exit code is non-zero by design and is not inspected.
+    # Judging it by exit code would make this step fail every time it worked; it
+    # is judged below by the component states it actually reported instead.
+    "$0" --no-e2e --quiet "$TEMP_TARGET" > "${TEMP_TARGET}.install.log" 2>&1 || true
     NESTED_LOG="${TEMP_TARGET}.install.log"
     nested_state() { grep -m1 "^$1=" "$NESTED_LOG" 2>/dev/null | cut -d= -f2-; }
     NESTED_STATIC="$(nested_state STATIC_CHECKS)"

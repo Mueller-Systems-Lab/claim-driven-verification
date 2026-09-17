@@ -69,7 +69,9 @@ BOOTSTRAP_VERSION="$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION")"
 
 R_STATIC=NOT_RUN; R_CANARY=NOT_RUN; R_EDGE=NOT_RUN; R_INSTALL=NOT_RUN
 R_E2E=NOT_RUN; R_READBACK=NOT_RUN; R_TARGET=NOT_RUN; R_CONTEXT=NOT_RUN
-R_SECOND=NOT_RUN
+R_SECOND=NOT_RUN; R_SHELL=NOT_RUN; R_PACKAGING=NOT_RUN
+SHELLCHECK_GATE=NOT_RUN; SHELL_UNBOUND_CANARY=NOT_RUN
+INSTALLED_TEST_PACKAGING_GATE=NOT_RUN; PACKAGING_NEGATIVE_CANARY=NOT_RUN
 CTX_POSITIVE=NOT_RUN; CTX_WRONG_PWD=NOT_RUN; CTX_WRONG_REPO=NOT_RUN
 CTX_STALE=NOT_RUN; CTX_GUARD_INACTIVE=NOT_RUN; CTX_ENFORCEMENT_PATH=NOT_RUN
 OR_EXECUTED=NOT_RUN; OR_ALWAYS_PASS=NOT_RUN; OR_CRASHING=NOT_RUN
@@ -83,7 +85,6 @@ GRAB_ANTITAMPER=NOT_RUN; GRAB_REALCOMMIT=NOT_RUN
 # state and declines. Either provider supplying the evidence is what "exercised
 # once at release level" actually means.
 ANTI_TAMPER_ANY=NOT_OBSERVED; REAL_COMMIT_ANY=NOT_OBSERVED
-SECOND_PROVIDER=NOT_RUN
 POSITIVE=UNKNOWN; NEGATIVE=UNKNOWN
 D_INDEP=NOT_OBSERVED; D_ORACLE=NOT_OBSERVED; D_CONFLICT=NOT_OBSERVED
 D_FRESH=NOT_OBSERVED; D_RESIDUAL=NOT_OBSERVED
@@ -181,6 +182,27 @@ for pair in "INDEPENDENCE:$D_INDEP" "ORACLE_QUALIFICATION:$D_ORACLE" \
 done
 
 # ---------------------------------------------------------------------------
+section "3a/6  STRICT-MODE SHELL RELIABILITY"
+# tests/verify.sh and installer/install.sh run under `set -u`, where an undefined
+# or out-of-order variable aborts the run part-way through. That class produced
+# three defects during development and `bash -n` does not detect it. ShellCheck is
+# the primary tool; it is run with --enable=all because SC2154 is an optional
+# check and is silent otherwise. ShellCheck does not detect the ordering variant
+# at all, so a small deterministic scan covers that. Both are exercised by
+# negative canaries in the same module.
+SHELL_LOG="$(mktemp "${TMPDIR:-/tmp}/cdv-shell-XXXXXX")"
+if "$PYTHON_BIN" "${REPO_ROOT}/tests/lib/shell_check.py" > "$SHELL_LOG" 2>&1; then
+  R_SHELL=PASS
+else
+  R_SHELL=FAIL; note_fail "strict-mode shell reliability"
+fi
+sed 's/^/  /' "$SHELL_LOG" | grep -aE 'SHELLCHECK_GATE|SHELL_UNBOUND|style-only|correctness findings|ordering / unbound' || true
+SHELLCHECK_GATE="$(grep -m1 '^SHELLCHECK_GATE=' "$SHELL_LOG" | cut -d= -f2)"
+SHELL_UNBOUND_CANARY="$(grep -m1 '^SHELL_UNBOUND_NEGATIVE_CANARY=' "$SHELL_LOG" | cut -d= -f2)"
+[ "$R_SHELL" = "PASS" ] || sed 's/^/       /' "$SHELL_LOG" | tail -25 >&2
+rm -f "$SHELL_LOG"
+
+# ---------------------------------------------------------------------------
 section "3b/6  VERIFICATION CONTEXT INTEGRITY"
 # The canaries for the observer. A behavioural result may not be interpreted
 # until the verifier has shown it is watching the intended target; these cases
@@ -247,6 +269,38 @@ if [ -n "$TARGET" ]; then
   [ -n "$SCHEMA_STATUS" ] || SCHEMA_STATUS=UNKNOWN
   R_TARGET=PASS
 fi
+
+# ---------------------------------------------------------------------------
+section "4b/6  INSTALLED-PACKAGE INTEGRITY"
+# SOURCE_TREE_PASS != INSTALLED_PACKAGE_PASS. For a packaging claim the oracle has
+# to execute against the installed target, so this installs into a fresh
+# disposable target and runs every installed verification entry point there. It
+# exists because an installed suite (edge_cases.py) once aborted in every target
+# with FileNotFoundError while passing perfectly in the source tree.
+PACKAGING_LOG="$(mktemp "${TMPDIR:-/tmp}/cdv-packaging-XXXXXX")"
+if "$PYTHON_BIN" "${REPO_ROOT}/tests/lib/packaging_check.py" > "$PACKAGING_LOG" 2>&1; then
+  R_PACKAGING=PASS
+else
+  R_PACKAGING=FAIL; note_fail "installed-package integrity"
+fi
+sed 's/^/  /' "$PACKAGING_LOG" | grep -aE 'INSTALLED_TEST_PACKAGING_GATE|installed files|UNDECLARED|ok   every installed entry point|FAIL' || true
+INSTALLED_TEST_PACKAGING_GATE="$(grep -m1 '^INSTALLED_TEST_PACKAGING_GATE=' "$PACKAGING_LOG" | cut -d= -f2)"
+[ "$R_PACKAGING" = "PASS" ] || sed 's/^/       /' "$PACKAGING_LOG" | tail -25 >&2
+rm -f "$PACKAGING_LOG"
+
+# The permanent regression for the original defect: re-introduce it and require
+# the gate to detect it, so the gate cannot pass by no longer looking.
+if "$PYTHON_BIN" "${REPO_ROOT}/tests/lib/packaging_check.py" --self-test \
+     > "${PACKAGING_LOG}.canary" 2>&1; then
+  PACKAGING_NEGATIVE_CANARY="$(grep -m1 '^PACKAGING_NEGATIVE_CANARY=' "${PACKAGING_LOG}.canary" | cut -d= -f2)"
+  ok "packaging negative canary: ${PACKAGING_NEGATIVE_CANARY:-NOT_REPORTED}"
+else
+  PACKAGING_NEGATIVE_CANARY=NOT_DETECTED
+  err "the packaging gate did not detect the defect it exists to detect"
+  sed 's/^/       /' "${PACKAGING_LOG}.canary" | tail -15 >&2
+  note_fail "packaging negative canary"
+fi
+rm -f "${PACKAGING_LOG}.canary"
 
 # ---------------------------------------------------------------------------
 section "5/6  END-TO-END GUARD ENFORCEMENT IN THE TARGET"
@@ -459,6 +513,9 @@ fi
 BOOTSTRAP=FAIL
 if [ "$R_STATIC" = "PASS" ] && [ "$R_CANARY" = "PASS" ] && [ "$R_EDGE" = "PASS" ] \
    && [ "$R_CONTEXT" = "PASS" ] && [ "$R_INSTALL" = "PASS" ] \
+   && [ "$R_SHELL" = "PASS" ] && [ "$R_PACKAGING" = "PASS" ] \
+   && [ "$SHELL_UNBOUND_CANARY" = "FAIL_AS_DESIGNED" ] \
+   && [ "$PACKAGING_NEGATIVE_CANARY" = "FAIL_AS_DESIGNED" ] \
    && [ "$R_E2E" = "PASS" ] && [ "$R_READBACK" = "PASS" ] \
    && [ "$SECOND_OK" -eq 1 ] && [ "$COVERAGE_OK" -eq 1 ] \
    && [ "${#fails[@]}" -eq 0 ]; then
@@ -543,6 +600,10 @@ PRIMARY_PROVIDER_CANARY=${R_E2E}
 SECOND_PROVIDER=${SECOND_MODEL_ACTIVE:-deferred}
 SECOND_PROVIDER_CANARY=${R_SECOND}
 --
+INSTALLED_TEST_PACKAGING_GATE=${INSTALLED_TEST_PACKAGING_GATE}
+PACKAGING_NEGATIVE_CANARY=${PACKAGING_NEGATIVE_CANARY}
+SHELLCHECK_GATE=${SHELLCHECK_GATE}
+SHELL_UNBOUND_NEGATIVE_CANARY=${SHELL_UNBOUND_CANARY}
 SCHEMA_STATUS=${SCHEMA_STATUS}
 INSTALLER_STATUS=${R_INSTALL}
 POSITIVE_CANARY=${POSITIVE}

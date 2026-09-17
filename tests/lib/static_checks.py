@@ -339,20 +339,38 @@ def main() -> int:
 
     # No consumer may hardcode a classification label; they must all read the
     # file. This is the check that would have caught the two reports disagreeing.
-    hardcoded: list[str] = []
-    for rel in ("installer/install.sh", "tests/verify.sh"):
-        path = os.path.join(REPO, rel)
-        if not os.path.isfile(path):
-            continue
-        body = open(path, "r", encoding="utf-8").read()
-        for token in ("BOOTSTRAP_VERIFIED", "BOOTSTRAP_INCOMPLETE"):
-            if token in body:
-                hardcoded.append(f"{rel}:{token}")
-    report(
-        not hardcoded,
-        "no report generator hardcodes a classification label",
-        f"hardcoded: {hardcoded}",
-    )
+    #
+    # The report generators are repository files, so this check cannot run inside
+    # an installed target. It says so explicitly rather than skipping silently: an
+    # earlier version used `continue`, and a check that quietly stops applying
+    # when it moves out of its source tree is indistinguishable from a check that
+    # passed, which is the failure mode this whole project exists to reject.
+    generators = ("installer/install.sh", "tests/verify.sh")
+    present = [r for r in generators if os.path.isfile(os.path.join(REPO, r))]
+    if not present:
+        report(
+            True,
+            "no report generator hardcodes a classification label "
+            "[NOT_APPLICABLE: repository-only check, no report generators installed here]",
+        )
+    else:
+        hardcoded: list[str] = []
+        for rel in present:
+            body = open(os.path.join(REPO, rel), "r", encoding="utf-8").read()
+            for token in ("BOOTSTRAP_VERIFIED", "BOOTSTRAP_INCOMPLETE"):
+                if token in body:
+                    hardcoded.append(f"{rel}:{token}")
+        missing = [r for r in generators if r not in present]
+        report(
+            not hardcoded,
+            "no report generator hardcodes a classification label",
+            f"hardcoded: {hardcoded}",
+        )
+        if missing:
+            report(
+                True,
+                f"report generators not present in this layout, not checked: {missing}",
+            )
 
     # --- 5: version agreement ----------------------------------------------
     version_file = open(os.path.join(REPO, "VERSION"), "r", encoding="utf-8").read().strip()

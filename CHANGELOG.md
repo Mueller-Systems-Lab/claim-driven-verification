@@ -11,6 +11,108 @@ ships a migration.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-09-17
+
+Corrective release. Scope is limited to two demonstrated defect classes: installed
+test packaging integrity, and shell strict-mode reliability in the verification
+entry points. No architectural change: the engine, the guard, the gate logic and
+every v1.0.1 proof are untouched.
+
+### Fixed — installed test packaging
+
+The installer shipped `tests/lib/edge_cases.py` into every target, but section D of
+that suite reads the repository's `examples/` directory, which is not installed.
+The installed copy therefore aborted with `FileNotFoundError` in every target while
+passing perfectly in the source tree. A test that appears runnable and
+deterministically fails is worse than no test: it trains the reader to ignore
+failures.
+
+Corrected by **not installing source-tree-only components**, rather than by copying
+the repository's example documents into every target. `edge_cases.py` validates the
+repository's shipped examples, which is a repository-documentation concern, and the
+installer already runs the suites that are target concerns. It remains a required
+file in the source tree; it is simply not installed.
+
+The same criterion was then applied to the two new gates themselves:
+`shell_check.py` (checks the repository's shell entry points) and
+`packaging_check.py` (runs the repository's installer) are source-tree-only and are
+deliberately **not** installed. Installing either would have been the same defect
+again with different names.
+
+This also exposed a third coupling: `independent_readback.py` kept a literal list of
+installed-to-source file pairs, so removing a component from the install set made
+it report drift for a file that was deliberately no longer there. It now derives its
+comparison set from the installation manifest, so the install surface can change
+without the check needing to be edited, and an installed file it cannot corroborate
+is reported rather than missed.
+
+### Added — packaging contract and gate
+
+- **`tests/lib/packaging_check.py`** implements the packaging contract. Every
+  installed file must have a declared role — `RUNTIME_REQUIRED`,
+  `TARGET_TEST_REQUIRED`, `DOCUMENTATION_REQUIRED` or
+  `INTENTIONALLY_INSTALLED_DATA` — so nothing is shipped by accident and nothing is
+  shipped without the resources it needs. Anything installed with no declared role
+  fails the gate, which means adding a file to the installer without deciding its
+  role fails rather than silently enlarging the installed surface.
+- **Fresh-install execution test.** The gate creates a disposable target, installs
+  into it, and then executes **every** installed verification entry point in that
+  target. It is not satisfied by a source-tree pass.
+- **`INSTALLED_TEST_PACKAGING_GATE`**, required for the release.
+- **`PACKAGING_NEGATIVE_CANARY=FAIL_AS_DESIGNED`**, a permanent regression that
+  re-introduces the original defect in two forms: installed-but-undeclared (caught
+  by the role rule) and declared-but-resource-absent (caught by execution, with the
+  same `FileNotFoundError` that shipped).
+
+The canonical rule this establishes, now stated in the module: **for a packaging
+claim, the oracle must execute against the installed target**, because
+`SOURCE_TREE_PASS != INSTALLED_PACKAGE_PASS`.
+
+### Added — strict-mode shell reliability
+
+`tests/verify.sh` and `installer/install.sh` run under `set -u`, where an undefined
+or out-of-order variable aborts the run part-way through. That class produced three
+defects during development — `VERBOSE`, `SECOND_MODEL`, `SECOND_OK` — and each of
+them passed `bash -n`, because `bash -n` parses without evaluating.
+
+- **ShellCheck**, installed through a standard zero-cost package route, is now the
+  primary tool, run with **`--enable=all`**. That flag is not optional: SC2154
+  ("referenced but not assigned") is an *optional* check and is silent at every
+  default severity, which is precisely the class of interest.
+- **Measured limit, and the gap it leaves.** ShellCheck detects a variable that is
+  never assigned anywhere. It does **not** detect a variable used before it is
+  assigned later in the same file — verified directly against ShellCheck 0.11.0 at
+  every severity with `--enable=all`. That variant is `SECOND_OK`, the defect that
+  actually reached a run. A gate relying on ShellCheck alone would have missed one
+  of the three demonstrated defects and reported PASS.
+- **`tests/lib/shell_check.py`** therefore adds the smallest deterministic scan for
+  the ordering class ShellCheck cannot see, plus unbound references as defence in
+  depth. Only top-level references are ordered against assignments: function bodies
+  execute when called, not where written, and comparing them textually produces
+  false positives on correct code. Defaulted expansions (`${VAR:-x}`) and
+  shell-provided or `CDV_`-prefixed names are excluded for the same reason.
+- **Findings are triaged.** Only codes that can cause a wrong or aborted run fail
+  the gate: SC2154, SC2034, SC2329, SC2086, SC2046, SC2164, SC2181, SC2128, SC2145,
+  SC2115, SC2068. The 423 style-only findings `--enable=all` emits (SC2250 "prefer
+  braces", SC2292 "prefer `[[ ]]`") are counted and reported but never gated,
+  because mechanically rewriting harmless style is not the job.
+- **Five real findings fixed:** a `say()` function that was never invoked, and four
+  assignments that were written and never read (`PREFLIGHT_OK`, `POSITIVE`,
+  `NESTED_OK`, `SECOND_PROVIDER`) — dead residue of the same class.
+- **`SHELLCHECK_GATE`** is reported `NOT_AVAILABLE` rather than `PASS` when
+  ShellCheck cannot be found, because a static check that did not run has not
+  verified anything.
+- **`SHELL_UNBOUND_NEGATIVE_CANARY=FAIL_AS_DESIGNED`**, a permanent regression
+  covering both variants, and verified non-vacuously by introducing the ordering
+  defect into the real `tests/verify.sh` and confirming it is reported with both
+  line numbers.
+
+### Note on scope
+
+No new dependencies were added to what a *target* requires. ShellCheck is needed to
+run this repository's release gate, not to install or use the verification system
+in a project.
+
 ### Fixed
 
 - **Contradictory classifications.** The report generators each hardcoded their
