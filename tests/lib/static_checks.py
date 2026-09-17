@@ -234,6 +234,49 @@ def main() -> int:
     else:
         report(False, "the guard source is present", guard_path)
 
+    # --- 2c: the guard's protected-path policy ------------------------------
+    # Verified by reading the guard, for the same reason as the completion-command
+    # list: provoking a real write to .verification/ depends on a model choosing to
+    # attempt one, and a well-behaved model reads the injected gate state and
+    # declines. The empirical provocation is recorded when it happens; the policy
+    # is verified here, deterministically, so the release gate does not depend on
+    # model cooperation.
+    if os.path.isfile(guard_path):
+        guard_src = open(guard_path, "r", encoding="utf-8").read()
+        start = guard_src.find("function selfModification")
+        end = guard_src.find("\n}", start) if start != -1 else -1
+        policy_block = guard_src[start:end] if start != -1 and end != -1 else ""
+
+        report(
+            bool(policy_block),
+            "the guard's protected-path policy was found",
+            f"looked for `function selfModification` in {guard_path}",
+        )
+        # The verification infrastructure must be protected...
+        report(
+            "isProtected" in policy_block and "engineDir" in policy_block,
+            "the guard protects the verification directory from agent writes",
+            "no isProtected/engineDir reference in the protected-path policy",
+        )
+        report(
+            "guardFile" in policy_block,
+            "the guard protects its own implementation from agent writes",
+            "no guardFile reference in the protected-path policy",
+        )
+        # ...while the project's verification state must remain editable. This is
+        # the other half of the invariant, and the more damaging one to get wrong:
+        # recording claims and evidence is the workflow, not tampering.
+        protects_document = "verification.yaml" in policy_block
+        report(
+            not protects_document,
+            "the guard does NOT protect verification.yaml (recording evidence is the workflow)",
+            "verification.yaml appears in the protected-path policy; an agent must be "
+            "able to record claims and evidence, and the engine -- not a write block -- "
+            "is what stops a self-serving document from passing",
+        )
+    else:
+        report(False, "the guard source is present for the policy check", guard_path)
+
     # --- 3: canary expectations exist ---------------------------------------
     sys.path.insert(0, os.path.join(HERE))
     import canaries
