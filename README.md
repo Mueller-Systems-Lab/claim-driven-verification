@@ -317,6 +317,14 @@ independently (currently schema `v1`). The installer records the bootstrap
 version and a hash of every installed file in
 `.verification/manifest.json`, which is what makes independent readback possible.
 
+`FINAL_CLASSIFICATION` is read from the `CLASSIFICATION` file, which is the single
+source of truth for both the installer and `tests/verify.sh` — two copies of a
+label is how two reports come to disagree. The label is release-scoped
+(`V1_0_1_HARDENING_VERIFIED`), and the static checks fail if it stops naming the
+release in `VERSION`, so a version bump cannot silently carry a stale
+classification. A publication run reports its own, higher classification
+describing the publication; `CLASSIFICATION` describes the repository's state.
+
 Future consumers should reference **a release tag** rather than mutable `main`.
 
 ## What this does not do

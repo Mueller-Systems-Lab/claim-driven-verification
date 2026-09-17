@@ -169,6 +169,7 @@ for required in core/cdv/cli.py bin/cdv templates/verification.yaml \
                 tests/lib/canaries.py tests/lib/canary_runner.py \
                 tests/lib/static_checks.py tests/lib/edge_cases.py \
                 tests/lib/context_canaries.py \
+                CLASSIFICATION \
                 tests/e2e/enforcement_canary.py \
                 tests/independent_readback.py; do
   if [ ! -e "${SRC_ROOT}/${required}" ]; then
@@ -266,6 +267,7 @@ cp -R "${SRC_ROOT}/schema/." "${ENGINE_DIR}/schema/"
 cp "${SRC_ROOT}/bin/cdv" "${ENGINE_DIR}/bin/cdv"
 chmod +x "${ENGINE_DIR}/bin/cdv"
 printf '%s\n' "$BOOTSTRAP_VERSION" > "${ENGINE_DIR}/VERSION"
+cp "${SRC_ROOT}/CLASSIFICATION" "${ENGINE_DIR}/CLASSIFICATION"
 
 # The installed launcher is the repository launcher with the engine lookup made
 # relative to the installation rather than to the source tree.
@@ -681,10 +683,22 @@ if [ "${R[ENGINE_STATUS]}" = "INSTALLED" ] \
   BOOTSTRAP_RESULT=PASS
 fi
 
+# Canonical classifications come from the CLASSIFICATION file, so that the
+# installer and tests/verify.sh cannot drift apart or carry a stale release
+# label. Fail closed if it is missing or incomplete: a report that guesses its
+# own classification is worse than one that refuses to print.
+CLASSIFICATION_FILE="${SRC_ROOT}/CLASSIFICATION"
+CLASSIFICATION_VERIFIED="$(sed -n 's/^CLASSIFICATION_VERIFIED=//p' "$CLASSIFICATION_FILE" 2>/dev/null | head -1)"
+CLASSIFICATION_INCOMPLETE="$(sed -n 's/^CLASSIFICATION_INCOMPLETE=//p' "$CLASSIFICATION_FILE" 2>/dev/null | head -1)"
+if [ -z "$CLASSIFICATION_VERIFIED" ] || [ -z "$CLASSIFICATION_INCOMPLETE" ]; then
+  fatal "cannot read CLASSIFICATION_VERIFIED and CLASSIFICATION_INCOMPLETE from ${CLASSIFICATION_FILE}"
+  exit 3
+fi
+
 if [ "$BOOTSTRAP_RESULT" = "PASS" ]; then
-  CLASSIFICATION=BOOTSTRAP_VERIFIED
+  CLASSIFICATION="$CLASSIFICATION_VERIFIED"
 else
-  CLASSIFICATION=BOOTSTRAP_INCOMPLETE
+  CLASSIFICATION="$CLASSIFICATION_INCOMPLETE"
 fi
 
 # FINAL_HEAD and WORKTREE describe the bootstrap repository itself and are

@@ -11,7 +11,27 @@ ships a migration.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Contradictory classifications.** The report generators each hardcoded their
+  own `FINAL_CLASSIFICATION` label while the release specification named a
+  different one, so the same state was reported under two names. There is now one
+  canonical classification, read from the `CLASSIFICATION` file by both the
+  installer and `tests/verify.sh`, and a static check fails if the label stops
+  naming the release in `VERSION` so a version bump cannot carry a stale one.
+- **A false PASS in the positive control.** "The permitted commit really landed"
+  searched `git log -3` for the canary's commit subject, so the *previous*
+  provider's commit in the same target satisfied it. The check is now scoped to a
+  change this run caused: HEAD must have moved and the new HEAD must be the
+  commit. Also relaxed from "exactly one commit" to "at least one", since the
+  property is that the action was permitted, not how many times it ran.
+- **External provider unavailability reported as a canary failure.** A
+  subscription provider exhausted its weekly quota part-way through a run and the
+  second-provider canary reported a failure that had nothing to do with the
+  guard. The canary now detects availability refusals and the pipeline reports
+  `SECOND_PROVIDER_CANARY=BLOCKED_EXTERNAL_AVAILABILITY`, counted as neither a
+  pass nor a product failure and retained as residual uncertainty, as the
+  specification requires.
 
 ## [1.0.1] - 2026-09-16
 

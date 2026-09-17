@@ -255,6 +255,62 @@ def main() -> int:
     dupes = {value: names for value, names in by_value.items() if len(names) > 1}
     report(not dupes, "no rule id is defined twice", f"duplicates: {dupes}")
 
+    # --- 4b: canonical classifications --------------------------------------
+    # The classification is release-scoped, so a version bump without a matching
+    # label change would leave a report claiming to describe a release it does
+    # not. Checked here rather than trusted.
+    classification_path = os.path.join(REPO, "CLASSIFICATION")
+    if not os.path.isfile(classification_path):
+        report(False, "the canonical CLASSIFICATION file exists", classification_path)
+    else:
+        cls = {}
+        for line in open(classification_path, "r", encoding="utf-8"):
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                key, value = line.split("=", 1)
+                cls[key.strip()] = value.strip()
+        verified = cls.get("CLASSIFICATION_VERIFIED", "")
+        incomplete = cls.get("CLASSIFICATION_INCOMPLETE", "")
+        report(
+            bool(verified) and bool(incomplete),
+            "CLASSIFICATION defines both CLASSIFICATION_VERIFIED and CLASSIFICATION_INCOMPLETE",
+            f"parsed: {cls}",
+        )
+        report(
+            bool(verified) and verified != incomplete,
+            "the verified and incomplete classifications are distinct",
+            f"verified={verified!r} incomplete={incomplete!r}",
+        )
+        schema_ver = open(os.path.join(REPO, "VERSION"), "r", encoding="utf-8").read().strip()
+        expected_prefix = "V" + schema_ver.replace(".", "_") + "_"
+        report(
+            verified.startswith(expected_prefix),
+            f"the verified classification names release {schema_ver} (expects prefix {expected_prefix!r})",
+            f"CLASSIFICATION_VERIFIED={verified!r} but VERSION={schema_ver}",
+        )
+        report(
+            incomplete.startswith(expected_prefix),
+            f"the incomplete classification names release {schema_ver}",
+            f"CLASSIFICATION_INCOMPLETE={incomplete!r} but VERSION={schema_ver}",
+        )
+
+    # No consumer may hardcode a classification label; they must all read the
+    # file. This is the check that would have caught the two reports disagreeing.
+    hardcoded: list[str] = []
+    for rel in ("installer/install.sh", "tests/verify.sh"):
+        path = os.path.join(REPO, rel)
+        if not os.path.isfile(path):
+            continue
+        body = open(path, "r", encoding="utf-8").read()
+        for token in ("BOOTSTRAP_VERIFIED", "BOOTSTRAP_INCOMPLETE"):
+            if token in body:
+                hardcoded.append(f"{rel}:{token}")
+    report(
+        not hardcoded,
+        "no report generator hardcodes a classification label",
+        f"hardcoded: {hardcoded}",
+    )
+
     # --- 5: version agreement ----------------------------------------------
     version_file = open(os.path.join(REPO, "VERSION"), "r", encoding="utf-8").read().strip()
     from cdv import __version__, SCHEMA_VERSION
