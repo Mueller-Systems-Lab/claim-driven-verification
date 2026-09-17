@@ -49,26 +49,45 @@ YELLOW = "\033[33m"
 DIM = "\033[2m"
 RESET = "\033[0m"
 
-# Provider-side availability problems. Observed for real: a subscription plan
-# exhausted its weekly quota part-way through a run, and the canary reported a
-# failure that had nothing to do with the guard. These are external
-# unavailability, and the specification requires them to be reported as such
-# rather than as either a pass or a product failure.
+# Provider-side availability problems.
+#
+# Observed for real: a subscription plan exhausted its weekly quota, and an
+# OpenRouter account hit its account-wide daily free-model cap. Both surfaced as
+# an "Error:" line and neither had anything to do with the guard.
+#
+# Two constraints shape this list, and both matter.
+#
+# First, the patterns must be specific. An earlier version included the bare word
+# "authentication", which appears throughout this project's own criticality
+# triggers and therefore matched ordinary prose -- a false positive.
+#
+# Second, and more seriously, a false positive here is not merely cosmetic: the
+# pipeline downgrades a failed second-provider run to BLOCKED_EXTERNAL_AVAILABILITY
+# rather than FAIL, so a spurious match could disguise a genuine guard regression
+# as external unavailability. Detection is therefore corroborated: a pattern only
+# counts if the guard's hooks demonstrably did *not* run, because if the guard ran
+# then the runtime was clearly working and any failure is real.
 AVAILABILITY_PATTERNS = [
     "limit exhausted",
-    "quota exhausted",
-    "insufficient quota",
-    "rate limit",
-    "too many requests",
-    "subscription plan does not",
+    "rate limit exceeded",
+    "free-models-per-day",
+    "quota",
     "does not yet include access",
-    "out of credits",
-    "no credits",
-    "unauthorized",
-    "authentication",
+    "free model training violation",
+    "insufficient credit",
+    "out of credit",
+    "add 10 credits",
     "invalid api key",
-    "account balance",
+    "no api key",
+    "api key not valid",
+    "payment required",
+    "account suspended",
+    "no endpoints available",
 ]
+
+# A pattern only counts on a line that reads like a failure report, so that prose
+# mentioning a topic cannot be mistaken for a provider refusing.
+FAILURE_LINE_MARKERS = ("error", "failed", "exceeded", "refused")
 
 MARKER_NAME = "CDV_E2E_MARKER"
 # A completion-adjacent command unique to this canary, injected through the same
@@ -276,22 +295,39 @@ def audit_entries(project: str) -> list[dict]:
 AGENT_OUTPUTS: list[str] = []
 
 
-def provider_availability() -> str:
-    """NONE, or the availability problem that stopped the provider."""
+def provider_availability(guard_hooks_fired: bool) -> str:
+    """NONE, or the availability problem that stopped the provider.
+
+    ``guard_hooks_fired`` corroborates the match. If the guard's hooks ran, the
+    runtime reached the point of enforcing, so a failure cannot be attributed to
+    the provider being unavailable -- and calling it one would mask a real
+    regression behind a label that the pipeline treats as acceptable.
+    """
+    matched: str | None = None
     for text in AGENT_OUTPUTS:
-        matched = availability_problem(text)
+        for line in text.splitlines():
+            lowered = line.lower()
+            if not any(marker in lowered for marker in FAILURE_LINE_MARKERS):
+                continue
+            for pattern in AVAILABILITY_PATTERNS:
+                if pattern in lowered:
+                    matched = pattern
+                    break
+            if matched:
+                break
         if matched:
-            return matched.upper().replace(" ", "_")
-    return "NONE"
+            break
 
-
-def availability_problem(text: str) -> str | None:
-    """Return the matched availability problem, if the provider refused on quota."""
-    lowered = text.lower()
-    for pattern in AVAILABILITY_PATTERNS:
-        if pattern in lowered:
-            return pattern
-    return None
+    if matched is None:
+        return "NONE"
+    if guard_hooks_fired:
+        print(
+            f"  note a string shaped like provider unavailability ({matched!r}) appeared, "
+            "but the guard's hooks demonstrably ran, so it is treated as prose and "
+            "discounted. Only an uninvolved failure can be attributed to the provider."
+        )
+        return "NONE"
+    return matched.upper().replace(" ", "_").replace("-", "_")
 
 
 def opencode(
@@ -437,6 +473,10 @@ def main() -> int:
     with open(guard_config_path, "w", encoding="utf-8") as handle:
         json.dump(existing_config, handle, indent=2)
 
+    # Audit activity at the start, so availability can be corroborated at the end
+    # by whether the guard's hooks ran during this run at all.
+    audit_before_run = len(audit_entries(project))
+
     marker = os.path.join(project, MARKER_NAME)
     backup = None
     document = os.path.join(project, "verification.yaml")
@@ -475,7 +515,7 @@ def main() -> int:
         # as untested rather than as passing -- the opposite of the v1.0.0 bug,
         # where an unexercised property was reported as a pass.
         # ===================================================================
-        def provoke(prompts, event, needle, attempts=3):
+        def provoke(prompts, event, needle, attempts=5):
             """Try prompts until a *new* audit entry evidences the refusal.
 
             Scoped to entries appended during this step. The audit log persists
@@ -873,7 +913,8 @@ def main() -> int:
     print(f"REAL_COMMIT_CANARY={real_commit}")
     print(f"PROVIDER_LABEL={args.provider_label or args.model}")
 
-    availability = provider_availability()
+    guard_hooks_fired = len(audit_entries(project)) > audit_before_run
+    availability = provider_availability(guard_hooks_fired)
     print(f"PROVIDER_AVAILABILITY={availability}")
     if failed:
         print(f"E2E_GUARD_ENFORCEMENT=FAIL ({len(failed)} check(s) failed)")
